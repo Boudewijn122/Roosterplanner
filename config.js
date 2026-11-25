@@ -7,6 +7,6 @@ window.RP_CONFIG = {
   snelWisselen: true,
   // Supabase (EU). Vul deze twee in, dan gaan verbeterpunten direct naar de database
   // in plaats van via de e-mailapp. De anon key is bedoeld om publiek te staan.
-  supabaseUrl: '',
-  supabaseAnonKey: ''
+  supabaseUrl: 'https://vglaucdnfdsvpycrltvw.supabase.co',
+  supabaseAnonKey: 'sb_publishable_Mf1mSOmKkpUzeALGpixnAQ_F2o4bQTm'
 };

@@ -8,7 +8,7 @@
   var PEOPLE = D.people;
   var ADMIN = { id: 'ADMIN', name: 'Beheerder', group: 'Beheer', role: 'admin', note: '' };
   var CONFIG = window.RP_CONFIG || {};
-  var APP_VERSION = '13 · 25 nov 2026';
+  var APP_VERSION = '14 · 25 nov 2026';
   PEOPLE.concat([ADMIN]).forEach(function (p) { p.baseName = p.name; });
   function usernameOf(id) { if (id === 'ADMIN') return 'beheerder'; var p = person(id); return p.baseName.toLowerCase().replace(/\s+/g, '-'); }
   function defaultPw(id) { return id === 'ADMIN' ? '1234' : 'welkom'; }
