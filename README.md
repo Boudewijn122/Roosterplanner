@@ -9,7 +9,7 @@ Op de iPhone: open de link in Safari → Deel → **Zet op beginscherm**.
 - Agenda per **dag, week en maand**, met codes uit MedSpace (OK3, LSU1, FKSU …)
 - **Afspraken** per dagdeel (ochtend, middag, avond) met tijd, soort (PT1, vergadering, wetenschap …) en omschrijving
 - **Visite** (08:00–08:30) automatisch vóór een ochtendspreekuur in het MCL
-- **Lang drukken** (telefoon) of **rechtermuisknop** (computer) op een dag of blok: ziek melden, vrij vragen, notitie, details
+- **Lang drukken** (telefoon) of **rechtermuisknop** (computer) op een dag, blok of leeg tijdstip: afspraak op dat tijdstip, inplannen, ziek melden, vrij vragen, notitie; dubbelklik op een leeg tijdstip maakt direct een afspraak
 - **Notities** per blok: privé, of zichtbaar voor iedereen voor wie dat recht heeft
 - **Team**: wie staat waar; **Bezetting**: tekorten t.o.v. de normen uit de Excel
 - **Afwezigheid** aanvragen en goedkeuren (planner)
@@ -25,6 +25,9 @@ Op de iPhone: open de link in Safari → Deel → **Zet op beginscherm**.
 - **Instellingen**: eigen kleuren per account, zachte kleuren, donkere modus, lettertype en tekstgrootte
 - Werkt zichzelf automatisch bij op telefoons die de app op het beginscherm hebben
 - Team en Bezetting alleen voor planner en beheerder
+- **Diensten**-tab: de **dienstplanner** ziet alleen de diensten (dagdienst, weekenddienst za+zo), plant per dag of verdeelt automatisch naar FTE; vakantie en "geen dienst" tellen als niet beschikbaar
+- Iedereen geeft in Diensten (of via lang drukken in de agenda) aan wanneer hij **geen dienst** kan; overzicht van FTE, % dienst, doel, ingepland en gedaan
+- Rollen: beheerder, planner (2), dienstplanner (1), specialist, AIOS/ANIOS; FTE en "doet diensten" per persoon in Beheer
 
 ## Let op
 Demo met geanonimiseerde namen (Chirurg A–H, AIOS 1–6). Alles (ook meldingen) wordt alleen op het eigen toestel bewaard;

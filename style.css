@@ -346,3 +346,15 @@ body.logged-out .layout { display: block; padding: 0; }
 .cnt { min-width: 16px; height: 14px; border-radius: 7px; padding: 0 4px; background: var(--surface2); color: var(--ink); font-size: .6rem; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1px var(--line); }
 .event.appt .t { font-weight: 700; }
 .event.appt .meta { opacity: 1; color: var(--muted); }
+
+/* Diensten */
+:root { --DI-bg: #E6E3FA; --DI-fg: #3B2F8F; --DI-bar: #6A5AE0; }
+[data-theme="dark"] { --DI-bg: #2A2552; --DI-fg: #C9C2FF; --DI-bar: #8E80FF; }
+.t-DI { background: var(--DI-bg); color: var(--DI-fg); --bar: var(--DI-bar); --on: #fff; }
+.mday.weekend { background: color-mix(in srgb, var(--surface2) 60%, transparent); }
+.dtable { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.dtable th, .dtable td { text-align: left; padding: .45rem .4rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.dtable th { color: var(--muted); font-weight: 600; font-size: .75rem; }
+.dtable td:not(:first-child), .dtable th:not(:first-child) { text-align: right; }
+.tg-col { cursor: cell; }
+@media (max-width: 560px) { .dtable { font-size: .78rem; } .dtable th, .dtable td { padding: .4rem .25rem; } }

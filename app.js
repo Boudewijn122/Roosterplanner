@@ -8,7 +8,7 @@
   var PEOPLE = D.people;
   var ADMIN = { id: 'ADMIN', name: 'Beheerder', group: 'Beheer', role: 'admin', note: '' };
   var CONFIG = window.RP_CONFIG || {};
-  var APP_VERSION = '8 · 25 nov 2026';
+  var APP_VERSION = '9 · 25 nov 2026';
   PEOPLE.concat([ADMIN]).forEach(function (p) { p.baseName = p.name; });
   function usernameOf(id) { if (id === 'ADMIN') return 'beheerder'; var p = person(id); return p.baseName.toLowerCase().replace(/\s+/g, '-'); }
   function defaultPw(id) { return id === 'ADMIN' ? '1234' : 'welkom'; }
@@ -156,6 +156,8 @@
     if (r0.sabbatical == null) r0.sabbatical = 0;
     if (r0.vakAlD == null) r0.vakAlD = 0;
     if (r0.conAlD == null) r0.conAlD = 0;
+    if (r0.fte == null) r0.fte = Math.round(r0.werkdagen / 5 * 100) / 100;
+    if (r0.doetDienst == null) r0.doetDienst = p.group === 'Specialist';
     delete r0.vakRecht; delete r0.vakAl;
   });
   var gaps = load('rp.gaps', []);
@@ -166,6 +168,9 @@
   var pwStore = load('rp.pw', {});
   var feedback = load('rp.feedback', []);
   var appts = load('rp.appts', []);
+  var duties = load('rp.duties', {});
+  var noDuty = load('rp.nodienst', {});
+  if (!load('rp.dienstSeeded', false)) { if (rights.B && rights.B.role === 'specialist') rights.B.role = 'dienst'; save('rp.dienstSeeded', true); }
   function applyNames() { PEOPLE.concat([ADMIN]).forEach(function (p) { var pr = profiles[p.id]; p.name = pr && pr.naam ? pr.naam : p.baseName; }); }
   applyNames();
   var requests = load('rp.requests', null);
@@ -173,7 +178,7 @@
     var nm = addDays(mondayOf(new Date()), 7);
     requests = [{ id: 'seed1', person: 'C', by: 'C', type: 'Congres', from: iso(addDays(nm, 2)), fromPart: 'dag', to: iso(addDays(nm, 3)), toPart: 'dag', note: 'Voorbeeldaanvraag', status: 'pending', created: Date.now() }];
   }
-  function persist() { save('rp.prefs', prefs); save('rp.overrides', overrides); save('rp.notes', notes); save('rp.rights', rights); save('rp.requests', requests); save('rp.gaps', gaps); save('rp.profiles', profiles); save('rp.notifs', notifs); save('rp.pw', pwStore); save('rp.feedback', feedback); save('rp.appts', appts); }
+  function persist() { save('rp.prefs', prefs); save('rp.overrides', overrides); save('rp.notes', notes); save('rp.rights', rights); save('rp.requests', requests); save('rp.gaps', gaps); save('rp.profiles', profiles); save('rp.notifs', notifs); save('rp.pw', pwStore); save('rp.feedback', feedback); save('rp.appts', appts); save('rp.duties', duties); save('rp.nodienst', noDuty); }
   persist();
 
   /* =========================================================
@@ -185,7 +190,9 @@
   function canApprove() { return isAdmin() || roleOf(state.user) === 'beheer'; }
   function canShare() { return isAdmin() || (rights[state.user] && rights[state.user].canShare); }
   function canActFor(pid) { return pid === state.user || canApprove(); }
-  function roleLabel(id) { return { admin: 'beheerder (alles)', beheer: 'planner', specialist: 'specialist', aios: 'AIOS / ANIOS' }[roleOf(id)]; }
+  function roleLabel(id) { return { admin: 'beheerder (alles)', beheer: 'planner', dienst: 'dienstplanner', specialist: 'specialist', aios: 'AIOS / ANIOS' }[roleOf(id)]; }
+  function canPlanDuty() { return isAdmin() || roleOf(state.user) === 'dienst'; }
+  function canSeeDutyAll() { return canPlanDuty() || canApprove(); }
 
   /* =========================================================
      Rooster
@@ -382,7 +389,7 @@
   var press = null, suppressClick = false;
   main.addEventListener('pointerdown', function (e) {
     if (e.pointerType === 'mouse') return;
-    var el = e.target.closest('[data-abs],[data-key],[data-date]');
+    var el = e.target.closest('[data-abs],[data-key],[data-date],[data-appt],[data-col]');
     if (!el) return;
     var x = e.clientX, y = e.clientY;
     press = { el: el, x: x, y: y, t: setTimeout(function () { suppressClick = true; if (navigator.vibrate) navigator.vibrate(10); contextFor(el, x, y); press = null; }, 520) };
@@ -391,7 +398,7 @@
   ['pointerup', 'pointercancel'].forEach(function (ev) { main.addEventListener(ev, function () { if (press) { clearTimeout(press.t); press = null; } }); });
   main.addEventListener('click', function (e) { if (suppressClick) { e.preventDefault(); e.stopPropagation(); suppressClick = false; } }, true);
   main.addEventListener('contextmenu', function (e) {
-    var el = e.target.closest('[data-abs],[data-key],[data-date]');
+    var el = e.target.closest('[data-abs],[data-key],[data-date],[data-appt],[data-col]');
     if (!el) return;
     e.preventDefault();
     var x = e.clientX, y = e.clientY;
@@ -399,8 +406,27 @@
     contextFor(el, x, y);
   });
 
+  function timeAt(col, y) {
+    var hh = +col.getAttribute('data-col').split('|')[2], remPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16, rect = col.getBoundingClientRect();
+    var mins = GRID_START * 60 + Math.round(((y - rect.top) / (hh * remPx) * 60) / 15) * 15;
+    return fromMin(Math.max(GRID_START * 60, Math.min(GRID_END * 60 - 15, mins)));
+  }
   function contextFor(el, x, y) {
     var items = [];
+    if (el.hasAttribute('data-appt')) { openAppt(null, null, null, el.getAttribute('data-appt')); return; }
+    if (el.hasAttribute('data-col')) {
+      var cc = el.getAttribute('data-col').split('|'), cpid = cc[0], cdi = cc[1];
+      var tm = timeAt(el, y), mins = toMin(tm), part = mins < 13 * 60 ? 0 : (mins < 17 * 60 ? 1 : 2), cd = parseIso(cdi);
+      items.push({ label: 'Afspraak om ' + tm + ' toevoegen…', run: function () { openAppt(cpid, cdi, part, null, tm); } });
+      if (canApprove() && part < 2 && weekday(cd) < 5) items.push({ label: 'Inplannen (' + HALVES[part].toLowerCase() + ')…', run: function () { openPlan([cpid], cdi, part); } });
+      if (canActFor(cpid)) {
+        items.push({ label: 'Vrij vragen…', run: function () { openRequest(cpid, cdi, part === 1 ? 'middag' : 'dag'); } });
+        if (part < 2) items.push({ label: 'Ziek melden – ' + HALVES[part].toLowerCase(), red: true, run: function () { reportSick(cpid, cdi, part); } });
+      }
+      if (cpid === state.user && dutyPeople().some(function (p) { return p.id === cpid; })) items.push({ label: isNoDuty(cpid, cdi) ? 'Toch beschikbaar voor dienst' : 'Geen dienst op deze dag', run: function () { toggleNoDuty(cpid, cdi); render(); toast('Opgeslagen voor de dienstplanner'); } });
+      openMenu(x, y, person(cpid).name + ' · ' + short(cd) + ' ' + tm, items);
+      return;
+    }
     if (el.hasAttribute('data-abs')) {
       var r = reqById(el.getAttribute('data-abs')); if (!r) return;
       if (canApprove() && r.status === 'pending' && r.person !== state.user) {
@@ -420,9 +446,10 @@
         items.push({ label: 'Vrij vragen…', run: function () { openRequest(pid, dIso, half === 1 ? 'middag' : 'dag'); } });
       }
       if (canApprove()) items.push({ label: 'Inplannen…', run: function () { openPlan([pid], dIso, half); } });
-      items.push({ label: 'Afspraak toevoegen…', run: function () { openAppt(pid, dIso, half); } });
+      var kcol = el.closest('[data-col]'), ktm = kcol ? timeAt(kcol, y) : null;
+      items.push({ label: ktm ? 'Afspraak om ' + ktm + ' toevoegen…' : 'Afspraak toevoegen…', run: function () { openAppt(pid, dIso, half, null, ktm); } });
       items.push({ label: 'Notitie toevoegen…', run: function () { openNotes(pid, dIso, half, true); } });
-      items.push({ label: 'Details en ingrepen', run: function () { openBlock(pid, dIso, half); } });
+      items.push({ label: 'Details', run: function () { openBlock(pid, dIso, half); } });
       if (isAdmin()) items.push({ label: 'Blok wijzigen…', run: function () { openBlock(pid, dIso, half, true); } });
       openMenu(x, y, p.name + ' · ' + short(d) + ' ' + HALVES[half].toLowerCase(), items);
     } else {
@@ -437,6 +464,7 @@
         items.push({ label: 'Notitie middag…', run: function () { openNotes(vp.id, di, 1, true); } });
       }
       if (canApprove() && weekday(dd) < 5) items.push({ label: 'Inplannen…', run: function () { openPlan([vp.id], di, 0); } });
+      if (vp.id === state.user && dutyPeople().some(function (p) { return p.id === vp.id; })) items.push({ label: isNoDuty(vp.id, di) ? 'Toch beschikbaar voor dienst' : 'Geen dienst op deze dag', run: function () { toggleNoDuty(vp.id, di); render(); toast('Opgeslagen voor de dienstplanner'); } });
       items.push({ label: 'Open deze dag', run: function () { state.cursor = dd; state.view = 'dag'; save('rp.view', 'dag'); render(); } });
       openMenu(x, y, vp.name + ' · ' + longDate(dd), items);
     }
@@ -677,8 +705,8 @@
     var today = iso(d) === iso(new Date()), n = apptsOn(p.id, iso(d)).length;
     var html = '<h2 class="day-head' + (today ? ' today' : '') + '"><span>' + esc(longDate(d)) + '</span><span class="note">' + (n ? n + ' afspra' + (n > 1 ? 'ken' : 'ak') + ' · ' : '') + (today ? 'vandaag' : '') + '</span></h2>';
     var add = '<button type="button" class="mini-btn" data-newappt="' + p.id + '|' + iso(d) + '">+ Afspraak toevoegen</button>';
-    if (weekday(d) > 4) return html + '<div class="list">' + apptCards(p.id, iso(d), 0) + apptCards(p.id, iso(d), 1) + apptCards(p.id, iso(d), 2) + '</div>' + (n ? '' : '<p class="empty">Weekend, geen basisrooster.</p>') + add;
-    return html + gapCards(iso(d)) + '<div class="list">' + eventCard(p, d, 0) + eventCard(p, d, 1) + apptCards(p.id, iso(d), 2) + '</div>' + add;
+    if (weekday(d) > 4) return html + '<div class="list">' + dutyCard(p.id, iso(d)) + apptCards(p.id, iso(d), 0) + apptCards(p.id, iso(d), 1) + apptCards(p.id, iso(d), 2) + '</div>' + (n || duties[iso(d)] === p.id ? '' : '<p class="empty">Weekend, geen basisrooster.</p>') + add;
+    return html + gapCards(iso(d)) + '<div class="list">' + dutyCard(p.id, iso(d)) + eventCard(p, d, 0) + eventCard(p, d, 1) + apptCards(p.id, iso(d), 2) + '</div>' + add;
   }
 
   /* =========================================================
@@ -700,12 +728,13 @@
         (a.text ? '<span class="meta">' + esc(a.text) + '</span>' : '') + '</span></button>';
     }).join('');
   }
-  function openAppt(pid, dIso, part, id) {
+  function openAppt(pid, dIso, part, id, startTime) {
     var a = id ? appts.filter(function (x) { return x.id === id; })[0] : null;
     var mine = !a || a.by === state.user || a.person === state.user || isAdmin();
     var who = a ? a.person : (canApprove() ? (pid || state.user) : state.user);
     if (who === 'ADMIN') who = viewPerson().id;
     var pt = a ? a.part : (part == null ? 0 : part), def = PART_DEF[pt];
+    if (!a && startTime) def = [startTime, fromMin(Math.min(toMin(startTime) + 30, 23 * 60 + 45))];
     var html = (canApprove() ? '<label class="f">Voor wie<select id="ap-person">' + PEOPLE.map(function (p) { return '<option value="' + p.id + '"' + (p.id === who ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select></label>' : '') +
       '<div class="grid2"><label class="f">Datum<input type="date" id="ap-date" value="' + (a ? a.date : dIso) + '"></label>' +
       '<label class="f">Dagdeel<select id="ap-part">' + PARTS.map(function (n, i) { return '<option value="' + i + '"' + (i === pt ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select></label>' +
@@ -734,6 +763,124 @@
     });
   }
 
+  /* =========================================================
+     Diensten (dagdienst doordeweeks, weekenddienst za+zo), verdeeld op FTE
+     ========================================================= */
+  function dutyType(d) { return weekday(d) > 4 ? ['WD', 'Weekenddienst'] : ['D', 'Dagdienst']; }
+  function dutyPeople() { return PEOPLE.filter(function (p) { return rights[p.id] && rights[p.id].doetDienst; }); }
+  function isNoDuty(pid, di) { return !!(noDuty[pid] && noDuty[pid][di]); }
+  function absentOn(pid, di) { var r = absenceFor(pid, di, 0) || absenceFor(pid, di, 1); if (r) return r; var d = parseIso(di); if (weekday(d) > 4) return requests.filter(function (x) { return x.person === pid && x.status !== 'declined' && di >= x.from && di <= x.to; })[0] || null; return null; }
+  function dutyBlock(pid, di) { if (isNoDuty(pid, di)) return 'geen dienst'; var a = absentOn(pid, di); if (a) return a.type.toLowerCase() + (a.status === 'pending' ? ' (aangevraagd)' : ''); return ''; }
+  function dutyStats(year) {
+    var ppl = dutyPeople(), fteSum = ppl.reduce(function (s, p) { return s + (rights[p.id].fte || 0); }, 0) || 1;
+    var days = Math.round((new Date(year + 1, 0, 1) - new Date(year, 0, 1)) / 86400000), today = iso(new Date());
+    var out = {};
+    ppl.forEach(function (p) { var f = rights[p.id].fte || 0; out[p.id] = { fte: f, pct: f / fteSum * 100, doel: f / fteSum * days, gepland: 0, gedaan: 0 }; });
+    Object.keys(duties).forEach(function (di) { var pid = duties[di]; if (!out[pid] || +di.slice(0, 4) !== year) return; out[pid].gepland++; if (di < today) out[pid].gedaan++; });
+    return out;
+  }
+  function assignDuty(di, pid, silent) {
+    var d = parseIso(di), dates = [di];
+    if (weekday(d) === 5) dates.push(iso(addDays(d, 1))); else if (weekday(d) === 6) dates.push(iso(addDays(d, -1)));
+    dates.forEach(function (x) { if (pid) duties[x] = pid; else delete duties[x]; });
+    if (pid && !silent) notify(pid, 'Ingepland voor ' + dutyType(d)[1].toLowerCase() + ': ' + short(parseIso(dates.sort()[0])) + (dates.length > 1 ? ' en ' + short(parseIso(dates[1])) : ''));
+  }
+  function autoDistribute(monthDate) {
+    var y = monthDate.getFullYear(), m = monthDate.getMonth(), st = dutyStats(y), count = {}, made = {}, n = 0;
+    dutyPeople().forEach(function (p) { count[p.id] = st[p.id].gepland; });
+    for (var d = new Date(y, m, 1); d.getMonth() === m; d = addDays(d, 1)) {
+      var di = iso(d); if (duties[di] || weekday(d) === 6) continue;
+      var wknd = weekday(d) === 5, dates = wknd ? [di, iso(addDays(d, 1))] : [di];
+      var best = null, bestScore = 1e9;
+      dutyPeople().forEach(function (p) {
+        if (dates.some(function (x) { return dutyBlock(p.id, x); })) return;
+        var prev = duties[iso(addDays(d, -1))] === p.id || duties[iso(addDays(d, -2))] === p.id;
+        var score = (count[p.id] + 0.5) / Math.max(0.05, st[p.id].fte) + (prev ? 50 : 0);
+        if (score < bestScore) { bestScore = score; best = p.id; }
+      });
+      if (!best) continue;
+      dates.forEach(function (x) { duties[x] = best; });
+      count[best] += dates.length; made[best] = (made[best] || 0) + dates.length; n += dates.length;
+    }
+    Object.keys(made).forEach(function (pid) { notify(pid, 'Je hebt ' + made[pid] + ' dienst' + (made[pid] > 1 ? 'en' : '') + ' in ' + MONTHS_LONG[m] + ' gekregen'); });
+    return n;
+  }
+  function dutyChip(pid, di) {
+    if (duties[di] !== pid) return '';
+    var t = dutyType(parseIso(di));
+    return '<span class="mbar t-DI"><span>' + t[0] + '</span></span>';
+  }
+  function dutyCard(pid, di) {
+    if (duties[di] !== pid) return '';
+    var t = dutyType(parseIso(di));
+    return '<div class="event t-DI" style="cursor:default"><span class="time">hele<br>dag</span><span class="body"><span class="ttl"><span class="code">' + t[0] + '</span><span class="t">' + t[1] + '</span></span></span></div>';
+  }
+  function toggleNoDuty(pid, di) {
+    noDuty[pid] = noDuty[pid] || {};
+    if (noDuty[pid][di]) delete noDuty[pid][di]; else noDuty[pid][di] = true;
+    if (noDuty[pid][di] && duties[di] === pid) notify('DIENST', person(pid).name + ' kan geen dienst op ' + short(parseIso(di)) + ', maar staat ingepland');
+    persist();
+  }
+  function renderDiensten() {
+    var cur = state.cursor, y = cur.getFullYear(), first = new Date(y, cur.getMonth(), 1), start = mondayOf(first), today = iso(new Date());
+    var planner = canPlanDuty(), mode = planner ? (state.dutyMode || 'plan') : 'mijn';
+    var me = person(state.user), st = dutyStats(y);
+    var html = '';
+    if (planner) html += '<div class="seg" style="grid-template-columns:repeat(2,1fr)" role="tablist" aria-label="Weergave"><button type="button" data-dmode="plan" aria-selected="' + (mode === 'plan') + '">Planning</button><button type="button" data-dmode="mijn" aria-selected="' + (mode === 'mijn') + '">Mijn beschikbaarheid</button></div>';
+    if (mode === 'plan') html += '<div class="btn-row"><button type="button" class="btn" id="d-auto">Automatisch verdelen</button><button type="button" class="btn secondary" id="d-clear">Maand leegmaken</button></div><p class="note" style="margin:0">Tik op een dag om iemand in te plannen. Vakantie (ook aangevraagd) en "geen dienst" tellen als niet beschikbaar. Verdeling naar FTE.</p>';
+    else html += '<p class="note" style="margin:0">Tik op de dagen waarop je <b>geen dienst</b> kunt. Vakantie hoef je niet aan te geven; die telt automatisch mee.</p>';
+    html += '<div class="month"><div class="month-head">' + DAYS.map(function (x) { return '<span>' + x + '</span>'; }).join('') + '</div><div class="month-grid">';
+    for (var i = 0; i < 42; i++) {
+      var d = addDays(start, i); if (i >= 35 && d.getMonth() !== cur.getMonth()) break;
+      var di = iso(d), pid = duties[di], wd = weekday(d), inner = '';
+      if (mode === 'plan') {
+        if (pid) { var bl = dutyBlock(pid, di); inner = '<span class="mbar ' + (bl ? 't-AF pend' : 't-DI') + '" title="' + esc(person(pid).name + (bl ? ' · ' + bl : '')) + '">' + esc(person(pid).name.replace(/^Chirurg /, '').split(' ')[0]) + (bl ? ' !' : '') + '</span>'; }
+        else inner = '<span class="mbar" style="color:var(--muted)">–</span>';
+      } else {
+        var own = state.user, nd = isNoDuty(own, di), ab = absentOn(own, di);
+        inner = (duties[di] === own ? '<span class="mbar t-DI">' + dutyType(d)[0] + '</span>' : '') + (nd ? '<span class="mbar t-AF pend">geen</span>' : '') + (ab ? '<span class="mbar t-AF">' + absLetter(ab) + '</span>' : '');
+      }
+      html += '<button type="button" class="mday' + (d.getMonth() !== cur.getMonth() ? ' out' : '') + (wd > 4 ? ' weekend' : '') + (di === today ? ' today' : '') + '" data-dday="' + di + '"><span class="mnum">' + d.getDate() + '</span>' + inner + '</button>';
+    }
+    html += '</div></div>';
+    var mine = Object.keys(duties).filter(function (di) { return duties[di] === state.user && di >= today; }).sort().slice(0, 8);
+    if (!isAdmin()) html += '<section class="card"><h2>Mijn komende diensten</h2>' + (mine.length ? mine.map(function (di) { return '<div class="w-row"><span>' + esc(longDate(parseIso(di))) + '</span><b>' + dutyType(parseIso(di))[1] + '</b></div>'; }).join('') : '<p class="empty">Geen diensten ingepland.</p>') + '</section>';
+    var rows = canSeeDutyAll() ? dutyPeople() : dutyPeople().filter(function (p) { return p.id === state.user; });
+    if (rows.length) html += '<section class="card"><h2>FTE en diensten ' + y + '</h2><div style="overflow-x:auto"><table class="dtable"><thead><tr><th>Naam</th><th>FTE</th><th>% dienst</th><th>Doel</th><th>Ingepland</th><th>Gedaan</th></tr></thead><tbody>' +
+      rows.map(function (p) { var s = st[p.id]; return '<tr><td>' + esc(p.name) + '</td><td>' + fmtN(s.fte) + '</td><td>' + fmtN(Math.round(s.pct * 10) / 10) + '%</td><td>' + Math.round(s.doel) + '</td><td>' + s.gepland + '</td><td>' + s.gedaan + '</td></tr>'; }).join('') +
+      '</tbody></table></div><p class="note" style="margin:0">% dienst = eigen FTE gedeeld door de FTE van iedereen die dienst doet. Doel = dat percentage van alle dagen in ' + y + '. FTE stelt de beheerder in.</p></section>';
+    main.innerHTML = html;
+    main.querySelectorAll('[data-dmode]').forEach(function (b) { b.addEventListener('click', function () { state.dutyMode = b.getAttribute('data-dmode'); render(); }); });
+    var au = document.getElementById('d-auto'); if (au) au.addEventListener('click', function () { var n = autoDistribute(cur); persist(); render(); toast(n ? n + ' dienstdagen verdeeld' : 'Niets te verdelen'); });
+    var cl = document.getElementById('d-clear'); if (cl) cl.addEventListener('click', function () { if (!window.confirm('Alle diensten in ' + MONTHS_LONG[cur.getMonth()] + ' leegmaken?')) return; Object.keys(duties).forEach(function (di) { var dd = parseIso(di); if (dd.getMonth() === cur.getMonth() && dd.getFullYear() === y) delete duties[di]; }); persist(); render(); });
+    main.querySelectorAll('[data-dday]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var di = b.getAttribute('data-dday');
+        if (mode === 'mijn') { toggleNoDuty(state.user, di); render(); return; }
+        openDutyAssign(di);
+      });
+    });
+  }
+  function openDutyAssign(di) {
+    var d = parseIso(di), t = dutyType(d), st = dutyStats(d.getFullYear()), cur = duties[di];
+    var list = dutyPeople().map(function (p) { return { p: p, bl: dutyBlock(p.id, di), ratio: (st[p.id].gepland) / Math.max(0.05, st[p.id].fte) }; })
+      .sort(function (a, b) { return (!!a.bl - !!b.bl) || a.ratio - b.ratio; });
+    var html = '<p class="note" style="margin:0">' + esc(t[1] + (weekday(d) > 4 ? ' (zaterdag en zondag samen)' : '')) + '</p><div class="cands">' + list.map(function (c) {
+      var s = st[c.p.id];
+      return '<button type="button" class="cand" data-dpick="' + c.p.id + '"' + (cur === c.p.id ? ' style="box-shadow:inset 0 0 0 2px var(--tint)"' : '') + '><span>' + esc(c.p.name) + ' <small>' + (c.bl ? 'Niet beschikbaar: ' + esc(c.bl) : s.gepland + ' van ~' + Math.round(s.doel) + ' diensten · FTE ' + fmtN(s.fte)) + '</small></span><span class="go">' + (cur === c.p.id ? 'Ingepland' : 'Kies') + '</span></button>';
+    }).join('') + '</div>' + (cur ? '<button type="button" class="btn secondary" id="d-none">Niemand (leegmaken)</button>' : '');
+    openSheet(longDate(d), html, function (root) {
+      root.querySelectorAll('[data-dpick]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var pid = b.getAttribute('data-dpick'), c = list.filter(function (x) { return x.p.id === pid; })[0];
+          function go() { assignDuty(di, pid); persist(); closeSheet(); render(); toast(person(pid).name + ' ingepland'); }
+          if (c.bl) showAlert('Niet beschikbaar', person(pid).name + ' heeft op deze dag: ' + c.bl + '. Toch inplannen?', 'Toch inplannen', 'Annuleren', go); else go();
+        });
+      });
+      var nn = root.querySelector('#d-none'); if (nn) nn.addEventListener('click', function () { assignDuty(di, null); persist(); closeSheet(); render(); });
+    });
+  }
+
   function personPicker() {
     var vp = viewPerson();
     return '<label class="f">Rooster van<select id="pick-person">' + PEOPLE.map(function (q) { return '<option value="' + q.id + '"' + (q.id === vp.id ? ' selected' : '') + '>' + esc(q.name + (q.id === state.user ? ' (ik)' : '')) + '</option>'; }).join('') + '</select></label>';
@@ -759,6 +906,7 @@
         var t = s.text ? typeOf(s.text) : 'AF', c = s.text ? (codeOf(s.text) || s.text.slice(0, 6)) : ab.type.slice(0, 5);
         bars += '<span class="mbar t-' + t + '"><span style="overflow:hidden;text-overflow:ellipsis">' + esc(c) + '</span>' + (ab ? '<i class="ab' + (ab.status !== 'approved' ? ' pend' : '') + '" title="' + esc(ab.type + (ab.status !== 'approved' ? ' (aangevraagd)' : '')) + '">' + absLetter(ab) + '</i>' : '') + '</span>';
       }
+      bars += dutyChip(p.id, di);
       var nc = notesOnDay(p.id, di);
       var gc = canApprove() ? openGapsOn(di).length : 0;
       html += '<button type="button" class="' + cls + '" data-date="' + di + '" aria-label="' + esc(longDate(d) + (gc ? ', ' + gc + ' tekort' : '')) + '"><span class="mnum">' + d.getDate() + '</span>' + bars + '<span class="mdots">' + (gc ? '<span class="dot gap"></span>' : '') + (nc ? '<span class="dot note"></span>' : '') + (apptsOn(p.id, di).length ? '<span class="cnt">' + apptsOn(p.id, di).length + '</span>' : '') + '</span></button>';
@@ -778,13 +926,13 @@
     var cols = '3rem repeat(' + days.length + ', minmax(0, 1fr))';
     var todayIso = iso(new Date());
     var html = '<div class="tgrid"><div class="tg-head" style="grid-template-columns:' + cols + '"><span></span>' + days.map(function (d) {
-      return '<button type="button" data-goto="' + iso(d) + '" class="' + (iso(d) === todayIso ? 'today' : '') + '"><span>' + DAYS[weekday(d)] + '</span><span class="n">' + d.getDate() + '</span></button>';
+      return '<button type="button" data-goto="' + iso(d) + '" class="' + (iso(d) === todayIso ? 'today' : '') + '"><span>' + DAYS[weekday(d)] + '</span><span class="n">' + d.getDate() + '</span>' + (duties[iso(d)] === p.id ? '<span class="code" style="background:var(--DI-bar);color:#fff;font-size:.6rem;padding:0 4px;border-radius:4px">' + dutyType(d)[0] + '</span>' : '') + '</button>';
     }).join('') + '</div><div class="tg-body" style="grid-template-columns:' + cols + ';height:' + total + 'rem"><div class="tg-hours">';
     for (var hr = GRID_START + 1; hr < GRID_END; hr++) html += '<span class="tg-hour" style="top:' + ((hr - GRID_START) * hourH) + 'rem">' + hr + ':00</span>';
     html += '</div>';
     var now = new Date(), nowMin = now.getHours() * 60 + now.getMinutes();
     days.forEach(function (d) {
-      html += '<div class="tg-col">';
+      html += '<div class="tg-col" data-col="' + p.id + '|' + iso(d) + '|' + hourH + '">';
       for (var hr2 = GRID_START + 1; hr2 < GRID_END; hr2++) html += '<span class="tg-line" style="top:' + ((hr2 - GRID_START) * hourH) + 'rem"></span>';
       if (iso(d) === todayIso && nowMin > GRID_START * 60 && nowMin < GRID_END * 60) html += '<span class="tg-now" style="top:' + ((nowMin / 60 - GRID_START) * hourH) + 'rem"></span>';
       if (weekday(d) < 5) for (var h = 0; h < 2; h++) {
@@ -834,6 +982,9 @@
   }
 
   function bindEvents() {
+    main.querySelectorAll('[data-col]').forEach(function (c) {
+      c.addEventListener('dblclick', function (e) { if (e.target !== c && !e.target.classList.contains('tg-line')) return; contextFor(c, e.clientX, e.clientY); });
+    });
     main.querySelectorAll('[data-appt]').forEach(function (b) { b.addEventListener('click', function () { openAppt(null, null, null, b.getAttribute('data-appt')); }); });
     main.querySelectorAll('[data-newappt]').forEach(function (b) { b.addEventListener('click', function () { var a = b.getAttribute('data-newappt').split('|'); openAppt(a[0], a[1], 0); }); });
     main.querySelectorAll('[data-abs]').forEach(function (b) { b.addEventListener('click', function () { openAbsence(b.getAttribute('data-abs')); }); });
@@ -931,6 +1082,7 @@
     r.status = 'pending';
     var g = gapsFor(r);
     r.status = 'approved'; addGaps(g);
+    Object.keys(duties).forEach(function (di) { if (duties[di] === r.person && di >= r.from && di <= r.to) notify('DIENST', person(r.person).name + ' is afwezig (' + r.type.toLowerCase() + ') op dienstdag ' + short(parseIso(di)) + ': nieuwe dienst nodig'); });
     notify(r.person, 'Je ' + r.type.toLowerCase() + ' van ' + short(parseIso(r.from)) + (r.to !== r.from ? ' t/m ' + short(parseIso(r.to)) : '') + ' is goedgekeurd');
     persist(); render();
     if (g.length) openGaps(function (x) { return x.reqId === r.id; }, 'Goedgekeurd · ' + g.length + ' tekort' + (g.length > 1 ? 'en' : ''));
@@ -1005,8 +1157,10 @@
     html += '<section class="card"><h2>Mensen en rechten</h2><p class="note">Planners keuren aanvragen goed. "Notities delen" bepaalt wie notities voor iedereen zichtbaar mag maken.</p><div class="ppl">' + PEOPLE.map(function (p) {
       var r = rights[p.id];
       return '<div class="pp"><span class="nm">' + esc(p.name) + ' <span class="pill">' + esc(p.group) + '</span></span>' +
-        '<select data-role="' + p.id + '" aria-label="Rol van ' + esc(p.name) + '"><option value="specialist"' + (r.role === 'specialist' ? ' selected' : '') + '>Specialist</option><option value="aios"' + (r.role === 'aios' ? ' selected' : '') + '>AIOS / ANIOS</option><option value="beheer"' + (r.role === 'beheer' ? ' selected' : '') + '>Planner</option></select>' +
+        '<select data-role="' + p.id + '" aria-label="Rol van ' + esc(p.name) + '"><option value="specialist"' + (r.role === 'specialist' ? ' selected' : '') + '>Specialist</option><option value="aios"' + (r.role === 'aios' ? ' selected' : '') + '>AIOS / ANIOS</option><option value="beheer"' + (r.role === 'beheer' ? ' selected' : '') + '>Planner</option><option value="dienst"' + (r.role === 'dienst' ? ' selected' : '') + '>Dienstplanner</option></select>' +
         '<label><input type="checkbox" data-share-right="' + p.id + '"' + (r.canShare ? ' checked' : '') + '> Notities delen</label>' +
+        '<label><input type="checkbox" data-doetdienst="' + p.id + '"' + (r.doetDienst ? ' checked' : '') + '> Doet diensten</label>' +
+        '<label>FTE <input type="number" min="0" max="1.2" step="0.05" data-right="' + p.id + '|fte" value="' + r.fte + '" style="width:4.2rem;min-height:40px;border-radius:8px;border:1px solid var(--line);background:var(--surface2);padding:0 .4rem"></label>' +
         [['werkdagen', 'Werkdagen p/w', 0.5], ['vakWeken', 'Vakantie (weken)', 1], ['sabbatical', 'Sabbatical (extra weken)', 1], ['conWeken', 'Congres (weken)', 1], ['vakAlD', 'Al opgenomen vakantie (dagen)', 0.5], ['conAlD', 'Al opgenomen congres (dagen)', 0.5]].map(function (f) {
           return '<label>' + f[1] + ' <input type="number" min="0" step="' + f[2] + '" data-right="' + p.id + '|' + f[0] + '" value="' + r[f[0]] + '" style="width:4.2rem;min-height:40px;border-radius:8px;border:1px solid var(--line);background:var(--surface2);padding:0 .4rem"></label>';
         }).join('') +
@@ -1031,6 +1185,7 @@
     bindReqButtons();
     main.querySelectorAll('[data-role]').forEach(function (s) { s.addEventListener('change', function () { rights[s.getAttribute('data-role')].role = s.value; persist(); toast('Rol aangepast'); }); });
     main.querySelectorAll('[data-right]').forEach(function (i) { i.addEventListener('change', function () { var a = i.getAttribute('data-right').split('|'); rights[a[0]][a[1]] = Math.max(0, +String(i.value).replace(',', '.') || 0); persist(); render(); toast('Aangepast'); }); });
+    main.querySelectorAll('[data-doetdienst]').forEach(function (c) { c.addEventListener('change', function () { rights[c.getAttribute('data-doetdienst')].doetDienst = c.checked; persist(); }); });
     main.querySelectorAll('[data-share-right]').forEach(function (c) { c.addEventListener('change', function () { rights[c.getAttribute('data-share-right')].canShare = c.checked; persist(); }); });
     main.querySelectorAll('[data-undo]').forEach(function (b) { b.addEventListener('click', function () { var k = b.getAttribute('data-undo'); delete overrides.blocks[k]; delete overrides.procs[k]; persist(); render(); }); });
     main.querySelectorAll('[data-del-note]').forEach(function (b) { b.addEventListener('click', function () { notes = notes.filter(function (n) { return n.id !== b.getAttribute('data-del-note'); }); persist(); render(); }); });
@@ -1062,7 +1217,7 @@
     }
   }
   function myNotifs() {
-    return notifs.filter(function (n) { return n.to === state.user || (n.to === 'PLANNERS' && canApprove()); }).sort(function (a, b) { return b.ts - a.ts; });
+    return notifs.filter(function (n) { return n.to === state.user || (n.to === 'PLANNERS' && canApprove()) || (n.to === 'DIENST' && canPlanDuty()); }).sort(function (a, b) { return b.ts - a.ts; });
   }
   function ago(ts) {
     var m = Math.round((Date.now() - ts) / 60000);
@@ -1533,16 +1688,17 @@
     team: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="17" cy="9" r="2.5"/><path d="M17 14c2.8 0 4.5 2 4.5 5"/></svg>',
     bezetting: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
     afwezig: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+    diensten: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/><path d="M12 13v4M10 15h4"/></svg>',
     beheer: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>'
   };
-  var LABELS = { agenda: 'Agenda', team: 'Team', bezetting: 'Bezetting', afwezig: 'Afwezig', beheer: 'Beheer', feedback: 'Verbeteren' };
+  var LABELS = { agenda: 'Agenda', team: 'Team', bezetting: 'Bezetting', diensten: 'Diensten', afwezig: 'Afwezig', beheer: 'Beheer', feedback: 'Verbeteren' };
 
   function render() {
     applyPrefs();
     if (!state.user || !person(state.user)) { closeSheet(); renderWidgets(); document.getElementById('tabs').innerHTML = ''; renderLogin(); return; }
     document.body.classList.remove('logged-out');
     var me = person(state.user);
-    var tabs = canApprove() ? ['agenda', 'team', 'bezetting', 'afwezig'] : ['agenda', 'afwezig'];
+    var tabs = canApprove() ? ['agenda', 'team', 'bezetting', 'diensten', 'afwezig'] : ['agenda', 'diensten', 'afwezig'];
     if (isAdmin()) tabs.push('beheer');
     if (tabs.indexOf(state.tab) < 0 && state.tab !== 'feedback') state.tab = 'agenda';
     var pend = canApprove() ? requests.filter(function (r) { return r.status === 'pending' && r.person !== state.user; }).length : 0;
@@ -1560,19 +1716,21 @@
     var c = state.cursor, title = document.getElementById('big-title'), sub = document.getElementById('subtitle');
     var seg = document.getElementById('view-seg'), arrows = document.getElementById('nav-arrows');
     seg.hidden = state.tab !== 'agenda';
-    arrows.hidden = !(state.tab === 'agenda' || state.tab === 'team' || state.tab === 'bezetting');
+    arrows.hidden = !(state.tab === 'agenda' || state.tab === 'team' || state.tab === 'bezetting' || state.tab === 'diensten');
     seg.querySelectorAll('[data-view]').forEach(function (b) { b.setAttribute('aria-selected', String(b.getAttribute('data-view') === state.view)); });
     if (state.tab === 'agenda') {
       if (state.view === 'maand') title.innerHTML = esc(MONTHS_LONG[c.getMonth()]) + ' <span class="year">' + c.getFullYear() + '</span>';
       else if (state.view === 'week') title.innerHTML = 'Week ' + isoWeek(c) + ' <span class="year">' + esc(MONTHS[mondayOf(c).getMonth()]) + '</span>';
       else title.innerHTML = esc(window.innerWidth < 560 ? DAYS[weekday(c)] : DAYS_LONG[weekday(c)]) + ' <span class="year">' + c.getDate() + ' ' + esc(MONTHS[c.getMonth()]) + '</span>';
+    } else if (state.tab === 'diensten') {
+      title.innerHTML = 'Diensten <span class="year">' + esc(MONTHS[c.getMonth()]) + (window.innerWidth < 560 ? '' : ' ' + c.getFullYear()) + '</span>';
     } else if (state.tab === 'team' || state.tab === 'bezetting') {
       title.innerHTML = esc(LABELS[state.tab]) + ' <span class="year">wk ' + isoWeek(c) + '</span>';
     } else title.textContent = LABELS[state.tab];
     sub.textContent = me.name + ' · ' + roleLabel(me.id) + (state.tab === 'agenda' ? ' · ' + (parityOf(c) === 'e' ? 'even' : 'oneven') + ' week' : '');
 
     if (state.tab === 'agenda') ({ maand: renderMonth, week: renderWeek, dag: renderDay })[state.view]();
-    else ({ team: renderTeam, bezetting: renderBezetting, afwezig: renderAfwezig, beheer: renderBeheer, feedback: renderFeedback })[state.tab]();
+    else ({ team: renderTeam, bezetting: renderBezetting, afwezig: renderAfwezig, beheer: renderBeheer, feedback: renderFeedback, diensten: renderDiensten })[state.tab]();
     renderWidgets();
   }
 
@@ -1582,7 +1740,7 @@
   });
   function step(dir) {
     var c = state.cursor;
-    if (state.tab === 'agenda' && state.view === 'maand') state.cursor = new Date(c.getFullYear(), c.getMonth() + dir, 1);
+    if ((state.tab === 'agenda' && state.view === 'maand') || state.tab === 'diensten') state.cursor = new Date(c.getFullYear(), c.getMonth() + dir, 1);
     else if (state.tab === 'agenda' && state.view === 'dag') state.cursor = addDays(c, dir);
     else state.cursor = addDays(c, 7 * dir);
     render();
