@@ -4,5 +4,9 @@
 window.RP_CONFIG = {
   feedbackEmailB64: 'Ymp2aW5rQGhvdG1haWwuY29t',
   // Testfase: accounts kiezen zonder wachtwoord. Zet op false als echte accounts live gaan.
-  snelWisselen: true
+  snelWisselen: true,
+  // Supabase (EU). Vul deze twee in, dan gaan verbeterpunten direct naar de database
+  // in plaats van via de e-mailapp. De anon key is bedoeld om publiek te staan.
+  supabaseUrl: '',
+  supabaseAnonKey: ''
 };

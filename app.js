@@ -8,7 +8,7 @@
   var PEOPLE = D.people;
   var ADMIN = { id: 'ADMIN', name: 'Beheerder', group: 'Beheer', role: 'admin', note: '' };
   var CONFIG = window.RP_CONFIG || {};
-  var APP_VERSION = '10 · 25 nov 2026';
+  var APP_VERSION = '11 · 25 nov 2026';
   PEOPLE.concat([ADMIN]).forEach(function (p) { p.baseName = p.name; });
   function usernameOf(id) { if (id === 'ADMIN') return 'beheerder'; var p = person(id); return p.baseName.toLowerCase().replace(/\s+/g, '-'); }
   function defaultPw(id) { return id === 'ADMIN' ? '1234' : 'welkom'; }
@@ -1561,7 +1561,7 @@
   function renderLogin() {
     if (QUICK) {
       document.body.classList.add('logged-out');
-      main.innerHTML = '<div class="login"><div class="login-card" style="max-width:560px"><img class="logo" src="icons/icon-192.png" alt=""><h1>Roosterplanner</h1><p class="note" style="text-align:center;margin:0">Testfase: tik op een account om in te loggen</p>' + accountButtons() + '</div></div>';
+      main.innerHTML = '<div class="login"><div class="login-card" style="max-width:560px"><img class="logo" src="icons/icon-192.png" alt=""><h1>Roosterplanner</h1><p class="note" style="text-align:center;margin:0">Testfase: tik op een account om in te loggen</p><p class="warn" style="margin:0">Testversie met voorbeeldgegevens. Wat je invult blijft op dit toestel. Voer geen patiëntgegevens in. Feedback via de knop met het tekstwolkje bovenin.</p>' + accountButtons() + '</div></div>';
       bindAccounts(main);
       return;
     }
@@ -1602,14 +1602,24 @@
     if (CONFIG.feedbackEmailB64) { try { return atob(CONFIG.feedbackEmailB64).trim(); } catch (e) { /* ongeldig */ } }
     return (CONFIG.feedbackEmail || '').trim();
   }
+  function sbReady() { return !!(CONFIG.supabaseUrl && CONFIG.supabaseAnonKey); }
+  function sendFeedbackDb(row) {
+    return fetch(CONFIG.supabaseUrl.replace(/\/$/, '') + '/rest/v1/feedback', {
+      method: 'POST',
+      headers: { apikey: CONFIG.supabaseAnonKey, Authorization: 'Bearer ' + CONFIG.supabaseAnonKey, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(row)
+    }).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); });
+  }
   function renderFeedback() {
     var to = feedbackEmail(), mine = feedback.filter(function (f) { return isAdmin() || f.by === state.user; }).sort(function (a, b) { return b.ts - a.ts; });
     var html = '<section class="card"><h2>Verbeterpunt of opmerking</h2><p class="note" style="margin:0">Je bericht gaat alleen naar de beheerder van het planprogramma.</p>' +
       '<div class="opts" role="group" aria-label="Soort">' + ['Verbetering', 'Fout', 'Vraag', 'Anders'].map(function (k, i) { return '<button type="button" data-fb="' + k + '" aria-pressed="' + (i === 0) + '">' + k + '</button>'; }).join('') + '</div>' +
       '<label class="f">Onderwerp<input id="fb-subj" maxlength="80" placeholder="Bijv. weekweergave op de computer"></label>' +
       '<label class="f">Toelichting<textarea id="fb-text" rows="5" maxlength="2000" placeholder="Wat werkt niet of wat mis je? Hoe zou het beter kunnen?"></textarea></label>' +
+      '<label class="f">Je echte naam (optioneel)<input id="fb-name" maxlength="60" autocomplete="name" value="' + esc(load('rp.fbName', '')) + '" placeholder="Zodat we weten van wie het komt"></label>' +
+      '<p class="note" style="margin:0">Zet hier geen patiëntgegevens in.</p>' +
       '<button type="button" class="btn" id="fb-send">Versturen naar beheerder</button>' +
-      (to ? '<p class="note" style="margin:0">Je e-mailapp opent met het bericht klaar om te versturen.</p>' : '<p class="warn">Er is nog geen e-mailadres van de beheerder ingesteld; het bericht wordt voorlopig alleen in de app bewaard.</p>') + '</section>';
+      (sbReady() ? '' : to ? '<p class="note" style="margin:0">Je e-mailapp opent met het bericht klaar om te versturen.</p>' : '<p class="warn">Er is nog geen e-mailadres van de beheerder ingesteld; het bericht wordt voorlopig alleen in de app bewaard.</p>') + '</section>';
     html += '<section class="card"><h2>' + (isAdmin() ? 'Alle verbeterpunten (op dit toestel)' : 'Mijn verzonden punten') + '</h2>' + (mine.length ? '<div class="notes">' + mine.map(function (f) {
       return '<div class="note-item"><span><b>' + esc(f.kind + ': ' + f.subject) + '</b></span><span>' + esc(f.text) + '</span><span class="by"><span>' + esc((isAdmin() ? (person(f.by) ? person(f.by).name + ' · ' : '') : '') + ago(f.ts)) + '</span>' + (isAdmin() ? '<button type="button" class="mini-btn" data-fbdel="' + f.id + '">Afgehandeld</button>' : '') + '</span></div>';
     }).join('') + '</div>' : '<p class="empty">Nog niets verstuurd.</p>') + '</section>';
@@ -1620,11 +1630,19 @@
     document.getElementById('fb-send').addEventListener('click', function () {
       var subj = document.getElementById('fb-subj').value.trim(), text = document.getElementById('fb-text').value.trim();
       if (!subj || !text) { toast('Vul een onderwerp en toelichting in'); return; }
-      var me = person(state.user), pr = profiles[state.user] || {};
+      var me = person(state.user), pr = profiles[state.user] || {}, realName = document.getElementById('fb-name').value.trim();
+      save('rp.fbName', realName);
+      if (sbReady()) {
+        var btn = document.getElementById('fb-send'); btn.disabled = true; btn.textContent = 'Versturen…';
+        sendFeedbackDb({ kind: kind, subject: subj, body: text, real_name: realName || null, account: me.name + ' (' + roleLabel(me.id) + ')', app_version: APP_VERSION, device: navigator.userAgent.slice(0, 200) })
+          .then(function () { feedback.push({ id: 'f' + Date.now(), by: state.user, kind: kind, subject: subj, text: text, ts: Date.now() }); persist(); render(); toast('Verstuurd, dank je!'); })
+          .catch(function () { btn.disabled = false; btn.textContent = 'Versturen naar beheerder'; toast('Versturen lukte niet. Probeer het later nog eens.'); });
+        return;
+      }
       feedback.push({ id: 'f' + Date.now(), by: state.user, kind: kind, subject: subj, text: text, ts: Date.now() });
       persist();
       if (to) {
-        var body = text + '\n\n—\nVan: ' + me.name + ' (' + usernameOf(me.id) + ')' + (pr.email ? '\nE-mail: ' + pr.email : '') + (pr.mobiel ? '\n06: ' + pr.mobiel : '') + '\nApp-versie: ' + new Date().toISOString().slice(0, 10);
+        var body = text + '\n\n—\nVan: ' + (realName ? realName + ' · account ' : '') + me.name + ' (' + usernameOf(me.id) + ')' + (pr.email ? '\nE-mail: ' + pr.email : '') + (pr.mobiel ? '\n06: ' + pr.mobiel : '') + '\nApp-versie: ' + new Date().toISOString().slice(0, 10);
         window.location.href = 'mailto:' + encodeURIComponent(to).replace('%40', '@') + '?subject=' + encodeURIComponent('[Roosterplanner] ' + kind + ': ' + subj) + '&body=' + encodeURIComponent(body);
       }
       render(); toast(to ? 'E-mail klaargezet' : 'Bewaard voor de beheerder');
