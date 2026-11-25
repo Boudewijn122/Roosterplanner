@@ -358,3 +358,13 @@ body.logged-out .layout { display: block; padding: 0; }
 .dtable td:not(:first-child), .dtable th:not(:first-child) { text-align: right; }
 .tg-col { cursor: cell; }
 @media (max-width: 560px) { .dtable { font-size: .78rem; } .dtable th, .dtable td { padding: .4rem .25rem; } }
+
+/* Snel wisselen van account (testfase) */
+.acc-group h3 { margin: .6rem 0 .35rem; font-size: .8rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.acc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .45rem; }
+.acc { display: flex; align-items: center; gap: .55rem; min-height: 52px; padding: .45rem .6rem; border: 0; border-radius: 12px; background: var(--surface); color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.acc b { display: block; font-size: .9rem; font-weight: 600; }
+.acc small { display: block; font-size: .72rem; color: var(--tint); }
+.acc.cur { box-shadow: inset 0 0 0 2px var(--tint); }
+.acc:active { transform: scale(.98); }
+.avatar.sm { width: 32px; height: 32px; flex: none; display: grid; place-items: center; font-size: .8rem; cursor: inherit; }

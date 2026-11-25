@@ -8,7 +8,7 @@
   var PEOPLE = D.people;
   var ADMIN = { id: 'ADMIN', name: 'Beheerder', group: 'Beheer', role: 'admin', note: '' };
   var CONFIG = window.RP_CONFIG || {};
-  var APP_VERSION = '9 · 25 nov 2026';
+  var APP_VERSION = '10 · 25 nov 2026';
   PEOPLE.concat([ADMIN]).forEach(function (p) { p.baseName = p.name; });
   function usernameOf(id) { if (id === 'ADMIN') return 'beheerder'; var p = person(id); return p.baseName.toLowerCase().replace(/\s+/g, '-'); }
   function defaultPw(id) { return id === 'ADMIN' ? '1234' : 'welkom'; }
@@ -1457,7 +1457,7 @@
       '<label class="f">Nieuw wachtwoord<input type="password" id="pw-new" autocomplete="new-password" minlength="6"></label>' +
       '<label class="f">Herhaal nieuw wachtwoord<input type="password" id="pw-rep" autocomplete="new-password"></label><p class="impact" id="pw-err"></p>' +
       '<button type="button" class="btn secondary" id="pw-save">Wachtwoord opslaan</button></div>' +
-      '<div class="btn-row"><button type="button" class="btn secondary" id="pf-settings">Instellingen</button><button type="button" class="btn danger" id="pf-logout">Uitloggen</button></div>';
+      '<div class="btn-row"><button type="button" class="btn secondary" id="pf-settings">Instellingen</button><button type="button" class="btn danger" id="pf-logout">Uitloggen</button></div>' + (QUICK ? '<button type="button" class="btn secondary" id="pf-switch">Wissel van account</button>' : '');
     openSheet('Mijn profiel', html, function (root) {
       root.querySelector('#pf-save').addEventListener('click', function () {
         var o = {}; root.querySelectorAll('[data-pf]').forEach(function (i) { var v = i.value.trim(); if (v) o[i.getAttribute('data-pf')] = v; });
@@ -1475,6 +1475,7 @@
       });
       root.querySelector('#pf-settings').addEventListener('click', function () { openSettings(); });
       root.querySelector('#pf-logout').addEventListener('click', logout);
+      var sw = root.querySelector('#pf-switch'); if (sw) sw.addEventListener('click', openSwitch);
     });
     myNotifs().forEach(function (n) { n.read = true; });
     persist(); render();
@@ -1541,7 +1542,29 @@
     for (var i = 0; i < all.length; i++) if (usernameOf(all[i].id) === u) return all[i].id;
     return null;
   }
+  var QUICK = CONFIG.snelWisselen !== false;
+  function accountButtons() {
+    var groups = [['Beheer', [ADMIN]], ['Specialisten', PEOPLE.filter(function (p) { return p.group === 'Specialist'; })], ['AIOS / ANIOS', PEOPLE.filter(function (p) { return p.group !== 'Specialist'; })]];
+    return groups.map(function (g) {
+      return '<div class="acc-group"><h3>' + g[0] + '</h3><div class="acc-grid">' + g[1].map(function (p) {
+        var role = roleOf(p.id), tag = role === 'admin' ? 'alles' : role === 'beheer' ? 'planner' : role === 'dienst' ? 'dienstplanner' : '';
+        return '<button type="button" class="acc' + (p.id === state.user ? ' cur' : '') + '" data-acc="' + p.id + '"><span class="avatar sm">' + esc(p.id === 'ADMIN' ? '★' : p.id) + '</span><span><b>' + esc(p.name) + '</b>' + (tag ? '<small>' + tag + '</small>' : '') + '</span></button>';
+      }).join('') + '</div></div>';
+    }).join('');
+  }
+  function bindAccounts(root) {
+    root.querySelectorAll('[data-acc]').forEach(function (b) { b.addEventListener('click', function () { var id = b.getAttribute('data-acc'); save('rp.lastUser', usernameOf(id)); login(id); }); });
+  }
+  function openSwitch() {
+    openSheet('Wissel van account', '<p class="note" style="margin:0">Testfase: kies een account, zonder wachtwoord.</p>' + accountButtons(), bindAccounts);
+  }
   function renderLogin() {
+    if (QUICK) {
+      document.body.classList.add('logged-out');
+      main.innerHTML = '<div class="login"><div class="login-card" style="max-width:560px"><img class="logo" src="icons/icon-192.png" alt=""><h1>Roosterplanner</h1><p class="note" style="text-align:center;margin:0">Testfase: tik op een account om in te loggen</p>' + accountButtons() + '</div></div>';
+      bindAccounts(main);
+      return;
+    }
     document.body.classList.add('logged-out');
     var last = load('rp.lastUser', '');
     main.innerHTML = '<div class="login"><form class="login-card" id="login-form" novalidate>' +
