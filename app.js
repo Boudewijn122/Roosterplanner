@@ -122,13 +122,21 @@
   var overrides = load('rp.overrides', { blocks: {}, procs: {} });
   var notes = load('rp.notes', []);
   var rights = load('rp.rights', {});
-  PEOPLE.forEach(function (p) { if (!rights[p.id]) rights[p.id] = { role: p.role, canShare: p.role !== 'aios' }; });
+  PEOPLE.forEach(function (p) {
+    if (!rights[p.id]) rights[p.id] = { role: p.role, canShare: p.role !== 'aios' };
+    if (rights[p.id].vakRecht == null) rights[p.id].vakRecht = p.group === 'Specialist' ? 272 : 200;
+    if (rights[p.id].vakAl == null) rights[p.id].vakAl = 0;
+  });
+  var gaps = load('rp.gaps', []);
+  var profiles = load('rp.profiles', {});
+  var notifs = load('rp.notifs', []);
+  if (!prefs.colors) prefs.colors = {};
   var requests = load('rp.requests', null);
   if (!requests) {
     var nm = addDays(mondayOf(new Date()), 7);
     requests = [{ id: 'seed1', person: 'C', by: 'C', type: 'Congres', from: iso(addDays(nm, 2)), fromPart: 'dag', to: iso(addDays(nm, 3)), toPart: 'dag', note: 'Voorbeeldaanvraag', status: 'pending', created: Date.now() }];
   }
-  function persist() { save('rp.prefs', prefs); save('rp.overrides', overrides); save('rp.notes', notes); save('rp.rights', rights); save('rp.requests', requests); }
+  function persist() { save('rp.prefs', prefs); save('rp.overrides', overrides); save('rp.notes', notes); save('rp.rights', rights); save('rp.requests', requests); save('rp.gaps', gaps); save('rp.profiles', profiles); save('rp.notifs', notifs); }
   persist();
 
   /* =========================================================
@@ -202,10 +210,27 @@
     }
     return out;
   }
-  function daysIn(r) {
+  function daysNum(r) {
     var n = 0, d = parseIso(r.from), end = parseIso(r.to), g = 0;
     while (d <= end && g++ < 400) { if (weekday(d) < 5) n += (covers(r, iso(d), 0) ? 0.5 : 0) + (covers(r, iso(d), 1) ? 0.5 : 0); d = addDays(d, 1); }
-    return String(n).replace('.', ',');
+    return n;
+  }
+  function daysIn(r) { return String(daysNum(r)).replace('.', ','); }
+  /* Vakantie-uren: een werkdag is 8 uur, een dagdeel 4 uur */
+  function hoursOf(r) { return daysNum(r) * 8; }
+  function fmtH(h) { return String(Math.round(h * 10) / 10).replace('.', ',') + ' u'; }
+  function saldoOf(pid) {
+    var rt = rights[pid] || { vakRecht: 0, vakAl: 0 }, op = rt.vakAl || 0, aanv = 0;
+    requests.forEach(function (r) {
+      if (r.person !== pid || r.type !== 'Vakantie') return;
+      if (r.status === 'approved') op += hoursOf(r); else if (r.status === 'pending') aanv += hoursOf(r);
+    });
+    return { recht: rt.vakRecht || 0, op: op, aanv: aanv, saldo: (rt.vakRecht || 0) - op };
+  }
+  function saldoHtml(pid) {
+    var s = saldoOf(pid);
+    return '<div class="saldo"><div><b>' + fmtH(s.recht) + '</b><span>Recht op</span></div><div><b>' + fmtH(s.op) + '</b><span>Opgenomen</span></div>' +
+      '<div><b>' + fmtH(s.aanv) + '</b><span>In aanvraag</span></div><div class="' + (s.saldo < 0 ? 'neg' : '') + '"><b>' + fmtH(s.saldo) + '</b><span>Saldo</span></div></div>';
   }
 
   /* =========================================================
@@ -235,8 +260,24 @@
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
     document.documentElement.setAttribute('data-font', prefs.font);
     document.documentElement.style.setProperty('--scale', prefs.scale);
+    var rs = document.documentElement.style, c = (prefs.colors && prefs.colors[state.user]) || {};
+    ['OK', 'POK', 'SU', 'FK', 'VS', 'OV', 'AF'].forEach(function (k) {
+      if (c[k]) {
+        rs.setProperty('--' + k + '-bar', c[k]);
+        rs.setProperty('--' + k + '-bg', 'color-mix(in srgb, ' + c[k] + ' 20%, var(--surface))');
+        rs.setProperty('--' + k + '-fg', 'color-mix(in srgb, ' + c[k] + ' 45%, var(--ink))');
+        rs.setProperty('--' + k + '-on', lum(c[k]) > 0.45 ? '#000000' : '#FFFFFF');
+      } else ['bar', 'bg', 'fg', 'on'].forEach(function (s) { rs.removeProperty('--' + k + '-' + s); });
+    });
+    if (c.tint) { rs.setProperty('--tint', c.tint); rs.setProperty('--on-tint', lum(c.tint) > 0.45 ? '#000000' : '#FFFFFF'); }
+    else { rs.removeProperty('--tint'); rs.removeProperty('--on-tint'); }
     var mt = document.querySelectorAll('meta[name="theme-color"]');
     mt.forEach(function (m) { m.setAttribute('content', dark ? '#000000' : '#F2F2F7'); });
+  }
+  function lum(hex) {
+    var h = hex.replace('#', ''); if (h.length === 3) h = h.split('').map(function (x) { return x + x; }).join('');
+    var v = [0, 2, 4].map(function (i) { var c = parseInt(h.substr(i, 2), 16) / 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); });
+    return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
   }
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () { if (prefs.theme === 'auto') applyPrefs(); });
 
@@ -310,6 +351,7 @@
         items.push({ label: 'Ziek melden – hele dag', red: true, run: function () { reportSick(pid, dIso, null); } });
         items.push({ label: 'Vrij vragen…', run: function () { openRequest(pid, dIso, half === 1 ? 'middag' : 'dag'); } });
       }
+      if (canApprove()) items.push({ label: 'Inplannen…', run: function () { openPlan([pid], dIso, half); } });
       items.push({ label: 'Notitie toevoegen…', run: function () { openNotes(pid, dIso, half, true); } });
       items.push({ label: 'Details en ingrepen', run: function () { openBlock(pid, dIso, half); } });
       if (isAdmin()) items.push({ label: 'Blok wijzigen…', run: function () { openBlock(pid, dIso, half, true); } });
@@ -324,6 +366,7 @@
         items.push({ label: 'Notitie ochtend…', run: function () { openNotes(vp.id, di, 0, true); } });
         items.push({ label: 'Notitie middag…', run: function () { openNotes(vp.id, di, 1, true); } });
       }
+      if (canApprove() && weekday(dd) < 5) items.push({ label: 'Inplannen…', run: function () { openPlan([vp.id], di, 0); } });
       items.push({ label: 'Open deze dag', run: function () { state.cursor = dd; state.view = 'dag'; save('rp.view', 'dag'); render(); } });
       openMenu(x, y, vp.name + ' · ' + longDate(dd), items);
     }
@@ -335,7 +378,10 @@
   function reportSick(pid, dIso, half) {
     var p = person(pid), d = parseIso(dIso);
     var r = { id: 's' + Date.now(), person: pid, by: state.user, type: 'Ziek', from: dIso, fromPart: half === 1 ? 'middag' : 'dag', to: dIso, toPart: half === 0 ? 'ochtend' : 'dag', note: '', status: 'approved', created: Date.now() };
-    requests.push(r); persist(); render();
+    var g = gapsFor(r);
+    requests.push(r); addGaps(g);
+    notify('PLANNERS', p.name + ' is ziek gemeld voor ' + short(d) + (half == null ? '' : ' ' + HALVES[half].toLowerCase()) + (g.length ? ' · ' + g.length + ' tekort(en)' : ''));
+    persist(); render();
     toast((pid === state.user ? 'Je bent' : p.name + ' is') + ' ziek gemeld voor ' + short(d) + (half == null ? '' : ' ' + HALVES[half].toLowerCase()));
   }
 
@@ -360,11 +406,12 @@
       '<p class="note" id="rq-rule"></p>' +
       '<div class="grid2"><label class="f">Van<input type="date" id="rq-from" value="' + fromIso + '"></label>' +
       '<label class="f">Vanaf<select id="rq-fromPart"><option value="dag">Hele dag</option><option value="middag"' + (fromPart === 'middag' ? ' selected' : '') + '>Middag</option></select></label>' +
-      '<label class="f">Tot en met<input type="date" id="rq-to" value="' + fromIso + '"></label>' +
+      '<label class="f">Tot en met<input type="date" id="rq-to" value="' + iso(addDays(parseIso(fromIso), 1)) + '"></label>' +
       '<label class="f">Tot en met<select id="rq-toPart"><option value="dag">Hele dag</option><option value="ochtend">Ochtend</option></select></label></div>' +
       '<label class="f">Toelichting<textarea id="rq-note" rows="2" maxlength="200" placeholder="Bijv. naam van het congres"></textarea></label>' +
       '<p class="impact" id="rq-late" hidden></p>' +
-      '<p class="impact ok" id="rq-impact"></p>' +
+      '<div id="rq-saldo" class="card" style="padding:.6rem .7rem"></div>' +
+      (canApprove() ? '<p class="impact ok" id="rq-impact"></p>' : '') +
       '<button type="button" class="btn" id="rq-send">Aanvraag indienen</button>';
     openSheet('Vrij vragen', html, function (root) {
       function current() {
@@ -395,10 +442,24 @@
         send.disabled = blocked;
         send.style.opacity = blocked ? '.45' : '';
         send.textContent = st === 'approved' ? 'Vastleggen' : 'Aanvraag indienen';
-        var imp = impactOf(r), el = root.querySelector('#rq-impact');
-        el.className = 'impact' + (imp.length ? '' : ' ok');
-        el.textContent = daysIn(r) + ' werkdag(en). ' + (imp.length ? 'Gevolg: ' + imp.join('; ') : 'Geen tekorten in de bezetting.');
+        var sb = root.querySelector('#rq-saldo');
+        if (kind === 'Vakantie') {
+          var sa = saldoOf(r.person), h = hoursOf(r), after = sa.saldo - sa.aanv - h;
+          sb.hidden = false;
+          sb.innerHTML = '<h3>Vakantiesaldo' + (r.person !== state.user ? ' · ' + esc(person(r.person).name) : '') + '</h3>' + saldoHtml(r.person) +
+            '<p class="note" style="margin:0">Deze aanvraag: ' + daysIn(r) + ' werkdag(en) = <b>' + fmtH(h) + '</b>. Saldo daarna: <b' + (after < 0 ? ' style="color:var(--low-ink)"' : '') + '>' + fmtH(after) + '</b>.</p>';
+        } else { sb.hidden = true; sb.innerHTML = ''; }
+        var el = root.querySelector('#rq-impact');
+        if (el) {
+          var imp = impactOf(r);
+          el.className = 'impact' + (imp.length ? '' : ' ok');
+          el.textContent = 'Voor de planner: ' + (imp.length ? 'gevolg ' + imp.join('; ') : 'geen tekorten in de bezetting.');
+        }
       }
+      root.querySelector('#rq-from').addEventListener('change', function () {
+        var f = root.querySelector('#rq-from'), to = root.querySelector('#rq-to');
+        if (f.value && (!to.value || to.value <= f.value)) to.value = iso(addDays(parseIso(f.value), 1));
+      });
       root.querySelectorAll('[data-kind]').forEach(function (b) {
         b.addEventListener('click', function () { kind = b.getAttribute('data-kind'); root.querySelectorAll('[data-kind]').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); }); preview(); });
       });
@@ -408,8 +469,19 @@
         var r = current(); if (!r.from || !r.to) return;
         if (tooLate(r) && !canApprove()) { preview(); return; }
         r.status = statusFor(r);
-        requests.push(r); persist(); closeSheet(); render();
-        toast(r.status === 'approved' ? 'Vastgelegd in het rooster' : 'Aanvraag verstuurd naar de planner');
+        if (r.status === 'approved') {
+          var g = gapsFor(r);
+          requests.push(r); addGaps(g);
+          if (r.person !== state.user) notify(r.person, r.type + ' vastgelegd door ' + person(state.user).name + ': ' + short(parseIso(r.from)) + (r.to !== r.from ? ' – ' + short(parseIso(r.to)) : ''));
+          persist(); closeSheet(); render();
+          if (g.length) openGaps(function (x) { return x.reqId === r.id; }, 'Vastgelegd · ' + g.length + ' tekort' + (g.length > 1 ? 'en' : ''));
+          else toast('Vastgelegd, geen tekorten');
+        } else {
+          requests.push(r);
+          notify('PLANNERS', 'Nieuwe aanvraag: ' + person(r.person).name + ' · ' + r.type + ' ' + short(parseIso(r.from)) + (r.to !== r.from ? ' – ' + short(parseIso(r.to)) : ''));
+          persist(); closeSheet(); render();
+          toast('Aanvraag verstuurd naar de planner');
+        }
       });
     });
   }
@@ -458,7 +530,7 @@
       if (loc && !s.absent) PEOPLE.forEach(function (q) { if (q.id === pid) return; var o = slot(q, d, half); if (!o.absent && locOf(o.text) === loc) team.push(q.name); });
       var html = '<div class="event t-' + t + '" style="cursor:default"><div class="body"><div class="ttl">' + (c && !s.absent ? '<span class="code">' + esc(c) + '</span>' : '') + '<span class="t">' + esc(s.absent ? s.absent.type : (s.text || 'Niet ingeroosterd')) + '</span></div>' +
         '<div class="meta">' + esc(longDate(d) + ' · ' + HALF_TIME[half][0] + '–' + HALF_TIME[half][1]) + '</div></div></div>' +
-        '<dl class="kv"><dt>Wie</dt><dd>' + esc(p.name) + '</dd><dt>Waar</dt><dd>' + esc(loc ? PLACE[loc] : '–') + '</dd>' +
+        '<dl class="kv"><dt>Wie</dt><dd>' + esc(p.name + contactOf(pid)) + '</dd><dt>Waar</dt><dd>' + esc(loc ? PLACE[loc] : '–') + '</dd>' +
         (team.length ? '<dt>Ook hier</dt><dd>' + esc(team.join(', ')) + '</dd>' : '') +
         (s.edited ? '<dt>Excel</dt><dd>' + esc(s.base || 'leeg') + ' <span class="pill">aangepast</span></dd>' : '') + '</dl>';
       if (procs.length) html += '<div class="card"><h3>Geplande ingrepen</h3><ul class="procs" style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.3rem">' +
@@ -516,7 +588,7 @@
     var today = iso(d) === iso(new Date());
     var html = '<h2 class="day-head' + (today ? ' today' : '') + '"><span>' + esc(longDate(d)) + '</span><span class="note">' + (today ? 'vandaag' : '') + '</span></h2>';
     if (weekday(d) > 4) return html + '<p class="empty">Weekend, geen basisrooster.</p>';
-    return html + '<div class="list">' + eventCard(p, d, 0) + eventCard(p, d, 1) + '</div>';
+    return html + gapCards(iso(d)) + '<div class="list">' + eventCard(p, d, 0) + eventCard(p, d, 1) + '</div>';
   }
 
   function personPicker() {
@@ -531,7 +603,7 @@
   function renderMonth() {
     var p = viewPerson(), cur = state.cursor, first = new Date(cur.getFullYear(), cur.getMonth(), 1), start = mondayOf(first);
     var todayIso = iso(new Date()), selIso = iso(cur);
-    var html = personPicker() + '<div class="month"><div class="month-head">' + DAYS.map(function (x) { return '<span>' + x + '</span>'; }).join('') + '</div><div class="month-grid">';
+    var html = gapBanner() + personPicker() + '<div class="month"><div class="month-head">' + DAYS.map(function (x) { return '<span>' + x + '</span>'; }).join('') + '</div><div class="month-grid">';
     for (var i = 0; i < 42; i++) {
       var d = addDays(start, i);
       if (i >= 35 && d.getMonth() !== cur.getMonth()) break;
@@ -544,7 +616,8 @@
         bars += '<span class="mbar t-' + t + '">' + esc(c) + (s.pending ? '?' : '') + '</span>';
       }
       var nc = notesOnDay(p.id, di);
-      html += '<button type="button" class="' + cls + '" data-date="' + di + '" aria-label="' + esc(longDate(d)) + '"><span class="mnum">' + d.getDate() + '</span>' + bars + '<span class="mdots">' + (nc ? '<span class="dot note"></span>' : '') + '</span></button>';
+      var gc = canApprove() ? openGapsOn(di).length : 0;
+      html += '<button type="button" class="' + cls + '" data-date="' + di + '" aria-label="' + esc(longDate(d) + (gc ? ', ' + gc + ' tekort' : '')) + '"><span class="mnum">' + d.getDate() + '</span>' + bars + '<span class="mdots">' + (gc ? '<span class="dot gap"></span>' : '') + (nc ? '<span class="dot note"></span>' : '') + '</span></button>';
     }
     html += '</div></div>' + dayList(p, cur) + '<p class="note">Tip: houd een dag of blok ingedrukt (of klik met de rechtermuisknop) om je ziek te melden, vrij te vragen of een notitie te maken.</p>';
     main.innerHTML = html;
@@ -589,7 +662,7 @@
   function renderWeek() {
     var p = viewPerson(), mon = mondayOf(state.cursor), days = [];
     for (var i = 0; i < 5; i++) days.push(addDays(mon, i));
-    main.innerHTML = personPicker() + timeGrid(days, p, false) + '<p class="note">' + (parityOf(mon) === 'e' ? 'Even' : 'Oneven') + ' week. Tik op een blok voor de ingrepen; houd ingedrukt of klik rechts voor meer opties.</p>';
+    main.innerHTML = gapBanner() + personPicker() + timeGrid(days, p, false) + '<p class="note">' + (parityOf(mon) === 'e' ? 'Even' : 'Oneven') + ' week. Tik op een blok voor de ingrepen; houd ingedrukt of klik rechts voor meer opties.</p>';
     bindPicker(); bindEvents();
   }
 
@@ -598,11 +671,14 @@
     var strip = '<div class="chips" style="grid-template-columns:repeat(7,minmax(0,1fr))">';
     for (var i = 0; i < 7; i++) { var x = addDays(mon, i); strip += '<button type="button" class="daychip" data-goto="' + iso(x) + '" aria-pressed="' + (iso(x) === iso(d)) + '">' + DAYS[i] + '<small' + (iso(x) === todayIso ? ' style="color:var(--today);font-weight:700"' : '') + '>' + x.getDate() + '</small></button>'; }
     strip += '</div>';
-    main.innerHTML = personPicker() + strip + (weekday(d) > 4 ? '<div class="card"><p class="empty">Weekend, geen basisrooster.</p></div>' : timeGrid([d], p, true));
+    main.innerHTML = gapBanner() + personPicker() + strip + gapCards(iso(d)) + (weekday(d) > 4 ? '<div class="card"><p class="empty">Weekend, geen basisrooster.</p></div>' : timeGrid([d], p, true));
     bindPicker(); bindEvents();
   }
 
   function bindEvents() {
+    main.querySelectorAll('[data-gaps]').forEach(function (b) {
+      b.addEventListener('click', function () { var v = b.getAttribute('data-gaps'); openGaps(v === 'all' ? function (g) { return g.status === 'open' && g.date >= iso(new Date()); } : function (g) { return g.date === v; }, v === 'all' ? 'Open tekorten' : 'Tekorten ' + short(parseIso(v))); });
+    });
     main.querySelectorAll('[data-key]').forEach(function (b) {
       b.addEventListener('click', function () { var k = b.getAttribute('data-key').split('|'); openBlock(k[0], k[1], +k[2]); });
     });
@@ -667,7 +743,7 @@
     var st = { pending: ['p', 'Aangevraagd'], approved: ['a', 'Goedgekeurd'], declined: ['d', 'Afgewezen'] }[r.status];
     var when = short(parseIso(r.from)) + (r.fromPart === 'middag' ? ' (middag)' : '') + (r.to !== r.from || r.toPart === 'ochtend' ? ' – ' + short(parseIso(r.to)) + (r.toPart === 'ochtend' ? ' (ochtend)' : '') : '');
     var html = '<div class="req' + (r.status === 'pending' ? ' pending' : '') + '"><div class="top-line"><b>' + esc(opts.showName ? p.name + ' · ' + r.type : r.type) + '</b><span class="status ' + st[0] + '">' + st[1] + '</span></div>' +
-      '<span class="note">' + esc(when + ' · ' + daysIn(r) + ' werkdag(en)' + (r.note ? ' · ' + r.note : '')) + '</span>';
+      '<span class="note">' + esc(when + ' · ' + daysIn(r) + ' werkdag(en)' + (r.type === 'Vakantie' ? ' · ' + fmtH(hoursOf(r)) : '') + (r.note ? ' · ' + r.note : '')) + '</span>';
     if (tooLate(r)) html += '<span class="impact">Aangevraagd binnen ' + VAK_WEEKS + ' weken (' + Math.max(0, Math.floor(leadDays(r) / 7)) + ' weken van tevoren)</span>';
     if (opts.review) {
       var imp = impactOf(r);
@@ -682,9 +758,22 @@
     main.querySelectorAll('[data-approve],[data-decline],[data-withdraw],[data-remove]').forEach(function (b) {
       b.addEventListener('click', function () {
         var id = b.getAttribute('data-approve') || b.getAttribute('data-decline') || b.getAttribute('data-withdraw') || b.getAttribute('data-remove');
-        if (b.hasAttribute('data-withdraw') || b.hasAttribute('data-remove')) requests = requests.filter(function (r) { return r.id !== id; });
-        else requests.forEach(function (r) { if (r.id === id) r.status = b.hasAttribute('data-approve') ? 'approved' : 'declined'; });
+        if (b.hasAttribute('data-withdraw') || b.hasAttribute('data-remove')) {
+          requests = requests.filter(function (r) { return r.id !== id; });
+          gaps = gaps.filter(function (g) { return !(g.reqId === id && g.status === 'open'); });
+          persist(); render(); return;
+        }
+        var r = requests.filter(function (x) { return x.id === id; })[0]; if (!r) return;
+        if (b.hasAttribute('data-decline')) {
+          r.status = 'declined'; notify(r.person, 'Je aanvraag (' + r.type.toLowerCase() + ' ' + short(parseIso(r.from)) + ') is afgewezen');
+          persist(); render(); return;
+        }
+        var g = gapsFor(r);
+        r.status = 'approved'; addGaps(g);
+        notify(r.person, 'Je ' + r.type.toLowerCase() + ' van ' + short(parseIso(r.from)) + (r.to !== r.from ? ' t/m ' + short(parseIso(r.to)) : '') + ' is goedgekeurd');
         persist(); render();
+        if (g.length) openGaps(function (x) { return x.reqId === r.id; }, 'Goedgekeurd · ' + g.length + ' tekort' + (g.length > 1 ? 'en' : ''));
+        else toast('Goedgekeurd, geen tekorten');
       });
     });
   }
@@ -696,6 +785,7 @@
       html += '<section class="card"><h2>Te beoordelen</h2>' + (pend.length ? pend.map(function (r) { return reqHtml(r, { showName: true, review: true }); }).join('') : '<p class="empty">Geen open aanvragen.</p>') + '</section>';
     }
     if (!isAdmin()) {
+      html += '<section class="card"><h2>Mijn vakantiesaldo</h2>' + saldoHtml(state.user) + '<p class="note" style="margin:0">1 werkdag = 8 uur, 1 dagdeel = 4 uur.</p></section>';
       html += '<div class="btn-row"><button type="button" class="btn" id="new-req">Vrij vragen</button><button type="button" class="btn danger" id="sick-today">Ziek vandaag</button></div>';
       html += '<p class="note">Vakantie vraag je minimaal ' + VAK_WEEKS + ' weken van tevoren aan; eerst mogelijke dag nu: ' + longDate(earliestVacation()) + '. Aanvragen worden goedgekeurd door de planner of beheerder.</p>';
       var mine = requests.filter(function (r) { return r.person === state.user; }).sort(function (a, b) { return a.from < b.from ? 1 : -1; });
@@ -717,7 +807,10 @@
       var r = rights[p.id];
       return '<div class="pp"><span class="nm">' + esc(p.name) + ' <span class="pill">' + esc(p.group) + '</span></span>' +
         '<select data-role="' + p.id + '" aria-label="Rol van ' + esc(p.name) + '"><option value="specialist"' + (r.role === 'specialist' ? ' selected' : '') + '>Specialist</option><option value="aios"' + (r.role === 'aios' ? ' selected' : '') + '>AIOS / ANIOS</option><option value="beheer"' + (r.role === 'beheer' ? ' selected' : '') + '>Planner</option></select>' +
-        '<label><input type="checkbox" data-share-right="' + p.id + '"' + (r.canShare ? ' checked' : '') + '> Notities delen</label></div>';
+        '<label><input type="checkbox" data-share-right="' + p.id + '"' + (r.canShare ? ' checked' : '') + '> Notities delen</label>' +
+        '<label>Recht op <input type="number" min="0" step="4" data-vak="' + p.id + '" value="' + r.vakRecht + '" style="width:5rem;min-height:40px;border-radius:8px;border:1px solid var(--line);background:var(--surface2);padding:0 .4rem"> u</label>' +
+        '<label>Al opgenomen <input type="number" min="0" step="4" data-vakal="' + p.id + '" value="' + r.vakAl + '" style="width:5rem;min-height:40px;border-radius:8px;border:1px solid var(--line);background:var(--surface2);padding:0 .4rem"> u</label>' +
+        (profileLine(p.id) ? '<span class="note" style="flex-basis:100%">' + esc(profileLine(p.id)) + '</span>' : '') + '</div>';
     }).join('') + '</div></section>';
     html += '<section class="card"><h2>Aangepaste blokken</h2>' + (edited.length ? edited.map(function (k) {
       var a = k.split('|'), p = person(a[0]);
@@ -734,6 +827,8 @@
     main.innerHTML = html;
     bindReqButtons();
     main.querySelectorAll('[data-role]').forEach(function (s) { s.addEventListener('change', function () { rights[s.getAttribute('data-role')].role = s.value; persist(); toast('Rol aangepast'); }); });
+    main.querySelectorAll('[data-vak]').forEach(function (i) { i.addEventListener('change', function () { rights[i.getAttribute('data-vak')].vakRecht = Math.max(0, +i.value || 0); persist(); toast('Vakantierecht aangepast'); }); });
+    main.querySelectorAll('[data-vakal]').forEach(function (i) { i.addEventListener('change', function () { rights[i.getAttribute('data-vakal')].vakAl = Math.max(0, +i.value || 0); persist(); toast('Opgenomen uren aangepast'); }); });
     main.querySelectorAll('[data-share-right]').forEach(function (c) { c.addEventListener('change', function () { rights[c.getAttribute('data-share-right')].canShare = c.checked; persist(); }); });
     main.querySelectorAll('[data-undo]').forEach(function (b) { b.addEventListener('click', function () { var k = b.getAttribute('data-undo'); delete overrides.blocks[k]; delete overrides.procs[k]; persist(); render(); }); });
     main.querySelectorAll('[data-del-note]').forEach(function (b) { b.addEventListener('click', function () { notes = notes.filter(function (n) { return n.id !== b.getAttribute('data-del-note'); }); persist(); render(); }); });
@@ -752,16 +847,303 @@
   /* =========================================================
      Instellingen, inloggen
      ========================================================= */
-  function openTextSettings() {
+  /* =========================================================
+     Meldingen (in deze demo alleen op dit toestel)
+     ========================================================= */
+  function notify(to, text) {
+    notifs.push({ id: 'm' + Date.now() + Math.random().toString(36).slice(2, 6), to: to, from: state.user, text: text, ts: Date.now(), read: false });
+    if (notifs.length > 300) notifs = notifs.slice(-300);
+    var forMe = to === state.user || (to === 'PLANNERS' && canApprove() && state.user !== 'ADMIN');
+    if (forMe && 'Notification' in window && Notification.permission === 'granted') {
+      try { new Notification('Roosterplanner', { body: text, icon: 'icons/icon-192.png' }); } catch (e) { /* niet ondersteund */ }
+    }
+  }
+  function myNotifs() {
+    return notifs.filter(function (n) { return n.to === state.user || (n.to === 'PLANNERS' && canApprove()); }).sort(function (a, b) { return b.ts - a.ts; });
+  }
+  function ago(ts) {
+    var m = Math.round((Date.now() - ts) / 60000);
+    if (m < 1) return 'zojuist'; if (m < 60) return m + ' min geleden';
+    var d = new Date(ts);
+    if (iso(d) === iso(new Date())) return 'vandaag ' + fromMin(d.getHours() * 60 + d.getMinutes());
+    return short(d);
+  }
+
+  /* =========================================================
+     Tekorten en invallers
+     ========================================================= */
+  var FILL = { 'MCL OK': 'OK MCL', 'MCL POK': 'pok', 'MCL SU': 'su', 'Drachten': 'NS su', 'FK': 'FK su', 'Sneek': 'sneek/su', 'Totaal': 'su' };
+  function gapsFor(r) {
+    var out = [], d = parseIso(r.from), end = parseIso(r.to), guard = 0;
+    while (d <= end && guard++ < 62) {
+      if (weekday(d) < 5) for (var h = 0; h < 2; h++) {
+        if (!covers(r, iso(d), h)) continue;
+        var b = countsFor(d, h, null), a = countsFor(d, h, r), found = [];
+        CHECKS.forEach(function (k) {
+          var n = needFor(d, h, k);
+          if ((b[k] || 0) >= n && (a[k] || 0) < n) found.push({ loc: k, need: n, have: a[k] || 0 });
+        });
+        var locs = found.filter(function (f) { return f.loc !== 'Totaal'; });
+        (locs.length ? locs : found).forEach(function (f) {
+          out.push({ id: 'g' + Date.now() + Math.random().toString(36).slice(2, 6), reqId: r.id, absent: r.person, reason: r.type.toLowerCase(), date: iso(d), half: h, loc: f.loc, need: f.need, have: f.have, status: 'open' });
+        });
+      }
+      d = addDays(d, 1);
+    }
+    return out;
+  }
+  function addGaps(list) { gaps = gaps.concat(list); }
+  function openGapsOn(di) { return gaps.filter(function (g) { return g.date === di && g.status === 'open'; }); }
+  var WARN_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>';
+  function gapBanner() {
+    if (!canApprove()) return '';
+    var n = gaps.filter(function (g) { return g.status === 'open' && g.date >= iso(new Date()); }).length;
+    if (!n) return '';
+    return '<button type="button" class="banner" data-gaps="all"><span style="display:flex;align-items:center;gap:.5rem">' + WARN_SVG + n + ' open tekort' + (n > 1 ? 'en' : '') + ' in de bezetting</span><span>Oplossen ›</span></button>';
+  }
+  function gapCards(di) {
+    if (!canApprove()) return '';
+    var list = gaps.filter(function (g) { return g.date === di; });
+    if (!list.length) return '';
+    return '<div class="list">' + list.map(function (g) {
+      var head = LOC_NAMES[g.loc] + ' · ' + HALVES[g.half].toLowerCase();
+      if (g.status === 'filled') return '<div class="gap-card done"><b>Opgelost: ' + esc(head) + '</b><span class="sm">' + esc(person(g.fill).name) + ' valt in voor ' + esc(person(g.absent).name) + '</span></div>';
+      if (g.status === 'noted') return '<div class="gap-card done"><b>Afgehandeld: ' + esc(head) + '</b><span class="sm">' + esc(g.note) + '</span></div>';
+      return '<div class="gap-card"><b>Tekort: ' + esc(head) + ' (' + g.have + ' van ' + g.need + ')</b><span class="sm">Door ' + esc(g.reason) + ' van ' + esc(person(g.absent).name) + '</span><button type="button" class="btn" data-gaps="' + di + '">Invaller kiezen of notitie</button></div>';
+    }).join('') + '</div>';
+  }
+  function candidates(g) {
+    var d = parseIso(g.date), c = countsFor(d, g.half, null), grp = person(g.absent).group, out = [];
+    PEOPLE.forEach(function (p) {
+      if (p.id === g.absent) return;
+      var s = slot(p, d, g.half);
+      if (s.absent) return;
+      var l = locOf(s.text);
+      if (!l) out.push({ p: p, score: s.text ? 1 : 0, why: s.text ? 'Nu: ' + s.text + ' (geen patiëntenzorg)' : 'Niet ingeroosterd' });
+      else if (g.loc !== 'Totaal' && l !== g.loc && l !== 'Elders' && l !== 'FK' && (c[l] || 0) > needFor(d, g.half, l)) out.push({ p: p, score: 2, why: 'Nu: ' + s.text + ' · ' + LOC_NAMES[l] + ' heeft er ' + ((c[l] || 0) - needFor(d, g.half, l)) + ' extra' });
+    });
+    out.sort(function (a, b) { return a.score - b.score || ((b.p.group === grp) - (a.p.group === grp)); });
+    return out.slice(0, 6);
+  }
+  function openGaps(filter, title) {
+    var ui = { open: null, note: null };
+    function draw() {
+      var list = gaps.filter(filter).sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : a.half - b.half; });
+      var html = list.length ? '' : '<p class="empty">Geen tekorten.</p>';
+      list.forEach(function (g) {
+        var d = parseIso(g.date), head = LOC_NAMES[g.loc] + ' · ' + short(d) + ' ' + HALVES[g.half].toLowerCase();
+        html += '<div class="gap-card' + (g.status !== 'open' ? ' done' : '') + '"><b>' + esc(head) + '</b>';
+        if (g.status === 'open') {
+          html += '<span class="sm">' + g.have + ' van ' + g.need + ' · door ' + esc(g.reason) + ' van ' + esc(person(g.absent).name) + '</span>' +
+            '<div class="btn-row"><button type="button" class="btn" data-cand="' + g.id + '">Kies invaller</button><button type="button" class="btn secondary" data-gnote="' + g.id + '">Notitie</button></div>';
+          if (ui.open === g.id) {
+            var cs = candidates(g);
+            html += '<div class="cands">' + (cs.length ? cs.map(function (c) {
+              return '<button type="button" class="cand" data-fill="' + g.id + '|' + c.p.id + '"><span>' + esc(c.p.name) + ' <small>' + esc(c.why) + '</small></span><span class="go">Inzetten</span></button>';
+            }).join('') : '<p class="sm">Geen vrije collega gevonden.</p>') +
+              '<button type="button" class="btn secondary" data-manual="' + g.id + '">Zelf iemand inplannen…</button></div>';
+          }
+          if (ui.note === g.id) html += '<label class="f">Notitie voor dit tekort<textarea id="gn-' + g.id + '" rows="2" maxlength="300" placeholder="Bijv. spreekuur verplaatst, OK-programma ingekort"></textarea></label><button type="button" class="btn" data-gsave="' + g.id + '">Opslaan als afgehandeld</button>';
+        } else if (g.status === 'filled') {
+          html += '<span class="sm">' + esc(person(g.fill).name) + ' valt in voor ' + esc(person(g.absent).name) + '</span><button type="button" class="mini-btn" style="align-self:flex-start" data-unfill="' + g.id + '">Ongedaan maken</button>';
+        } else {
+          html += '<span class="sm">Notitie: ' + esc(g.note) + '</span><button type="button" class="mini-btn" style="align-self:flex-start" data-reopen="' + g.id + '">Heropenen</button>';
+        }
+        html += '</div>';
+      });
+      openSheet(title, html, function (root) {
+        function byId(id) { return gaps.filter(function (x) { return x.id === id; })[0]; }
+        root.querySelectorAll('[data-cand]').forEach(function (b) { b.addEventListener('click', function () { ui.open = ui.open === b.getAttribute('data-cand') ? null : b.getAttribute('data-cand'); ui.note = null; draw(); }); });
+        root.querySelectorAll('[data-gnote]').forEach(function (b) { b.addEventListener('click', function () { ui.note = b.getAttribute('data-gnote'); ui.open = null; draw(); var ta = document.getElementById('gn-' + ui.note); if (ta) ta.focus(); }); });
+        root.querySelectorAll('[data-fill]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            var a = b.getAttribute('data-fill').split('|'), g = byId(a[0]), pid = a[1], k = keyOf(pid, g.date, g.half);
+            g.prevText = Object.prototype.hasOwnProperty.call(overrides.blocks, k) ? overrides.blocks[k] : null;
+            overrides.blocks[k] = FILL[g.loc] + ' (invaller)';
+            notes.push({ id: 'n' + Date.now(), key: k, author: state.user, text: 'Invaller voor ' + person(g.absent).name + ' (' + g.reason + ')', shared: true, ts: Date.now() });
+            g.status = 'filled'; g.fill = pid;
+            notify(pid, 'Je bent ingepland als invaller: ' + LOC_NAMES[g.loc] + ' · ' + short(parseIso(g.date)) + ' ' + HALVES[g.half].toLowerCase());
+            persist(); render(); ui.open = null; draw(); toast(person(pid).name + ' ingepland en op de hoogte gebracht');
+          });
+        });
+        root.querySelectorAll('[data-manual]').forEach(function (b) { b.addEventListener('click', function () { var g = byId(b.getAttribute('data-manual')); openPlan([], g.date, g.half, FILL[g.loc]); }); });
+        root.querySelectorAll('[data-gsave]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            var g = byId(b.getAttribute('data-gsave')), v = (document.getElementById('gn-' + g.id).value || '').trim(); if (!v) return;
+            g.status = 'noted'; g.note = v.slice(0, 300); persist(); render(); ui.note = null; draw();
+          });
+        });
+        root.querySelectorAll('[data-unfill]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            var g = byId(b.getAttribute('data-unfill')), k = keyOf(g.fill, g.date, g.half);
+            if (g.prevText == null) delete overrides.blocks[k]; else overrides.blocks[k] = g.prevText;
+            notes = notes.filter(function (n) { return !(n.key === k && /^Invaller voor/.test(n.text)); });
+            notify(g.fill, 'Invalbeurt vervallen: ' + LOC_NAMES[g.loc] + ' · ' + short(parseIso(g.date)) + ' ' + HALVES[g.half].toLowerCase());
+            g.status = 'open'; delete g.fill; persist(); render(); draw();
+          });
+        });
+        root.querySelectorAll('[data-reopen]').forEach(function (b) { b.addEventListener('click', function () { var g = byId(b.getAttribute('data-reopen')); g.status = 'open'; delete g.note; persist(); render(); draw(); }); });
+      });
+    }
+    draw();
+  }
+
+  /* =========================================================
+     Inplannen door planner of beheerder
+     ========================================================= */
+  var PLAN_ACTS = [['OK MCL', 'OK 3 · MCL'], ['OK 10', 'OK 10 · MCL'], ['combi OK', 'Combi OK · MCL'], ['pok', 'POK · MCL'], ['su', 'Spreekuur · MCL'],
+    ['FK su', 'Spreekuur · Friesland Kliniek'], ['FK OK', 'OK · Friesland Kliniek'], ['FK pok', 'POK · Friesland Kliniek'], ['NS OK', 'OK · Nij Smellinghe'], ['NS pok', 'POK · Nij Smellinghe'],
+    ['sneek/su', 'Sneek'], ['visite', 'Visite'], ['overleg', 'Overleg / vergadering'], ['onderwijs', 'Onderwijs'], ['AO', 'AO'], ['', 'Anders…']];
+  function openPlanChoice(pid, dIso, half) {
+    openSheet('Wat wil je doen?', '<div class="list"><button type="button" class="btn" id="pc-plan">Activiteit inplannen</button><button type="button" class="btn secondary" id="pc-abs">Afwezigheid vastleggen</button></div>', function (root) {
+      root.querySelector('#pc-plan').addEventListener('click', function () { openPlan(pid ? [pid] : [], dIso, half); });
+      root.querySelector('#pc-abs').addEventListener('click', function () { openRequest(pid, dIso, 'dag'); });
+    });
+  }
+  function openPlan(pids, dIso, half, presetText) {
+    var known = PLAN_ACTS.some(function (a) { return a[0] === presetText; });
+    var html = '<div class="card"><h3>Wie</h3><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.1rem .6rem">' + PEOPLE.map(function (p) {
+      return '<label class="toggle" style="min-height:40px;justify-content:flex-start;gap:.5rem"><input type="checkbox" data-pp="' + p.id + '"' + (pids.indexOf(p.id) >= 0 ? ' checked' : '') + '>' + esc(p.name) + '</label>';
+    }).join('') + '</div></div>' +
+      '<div class="grid2"><label class="f">Datum<input type="date" id="pl-date" value="' + dIso + '"></label>' +
+      '<label class="f">Dagdeel<select id="pl-half"><option value="0"' + (half === 0 ? ' selected' : '') + '>Ochtend</option><option value="1"' + (half === 1 ? ' selected' : '') + '>Middag</option><option value="2">Hele dag</option></select></label></div>' +
+      '<label class="f">Activiteit<select id="pl-act">' + PLAN_ACTS.map(function (a) { return '<option value="' + esc(a[0]) + '"' + ((known && a[0] === presetText) || (!known && presetText && a[0] === '') ? ' selected' : '') + '>' + esc(a[1]) + '</option>'; }).join('') + '</select></label>' +
+      '<label class="f" id="pl-custom-wrap"' + (!known && presetText ? '' : ' hidden') + '>Eigen omschrijving<input id="pl-custom" maxlength="60" value="' + esc(!known && presetText ? presetText : '') + '"></label>' +
+      '<label class="f">Ingrepen (optioneel, één per regel: tijd naam)<textarea id="pl-procs" rows="3" placeholder="08:15 Mammareductie"></textarea></label>' +
+      '<label class="f">Notitie voor iedereen (optioneel)<input id="pl-note" maxlength="200" placeholder="Bijv. extra OK-dag i.v.m. wachtlijst"></label>' +
+      '<p class="note" id="pl-prev"></p>' +
+      '<label class="toggle">Betrokkenen een melding sturen<input type="checkbox" id="pl-notify" checked></label>' +
+      '<button type="button" class="btn" id="pl-save">Inplannen</button>';
+    openSheet('Inplannen', html, function (root) {
+      function vals() {
+        var sel = [].slice.call(root.querySelectorAll('[data-pp]:checked')).map(function (c) { return c.getAttribute('data-pp'); });
+        var act = root.querySelector('#pl-act').value, text = act || root.querySelector('#pl-custom').value.trim();
+        var h = +root.querySelector('#pl-half').value;
+        return { pids: sel, date: root.querySelector('#pl-date').value, halves: h === 2 ? [0, 1] : [h], text: text };
+      }
+      function preview() {
+        root.querySelector('#pl-custom-wrap').hidden = root.querySelector('#pl-act').value !== '';
+        var v = vals(), el = root.querySelector('#pl-prev');
+        if (!v.date || !v.pids.length || !v.text) { el.textContent = 'Kies minstens één persoon en een activiteit.'; return; }
+        var d = parseIso(v.date);
+        if (weekday(d) > 4) { el.textContent = 'Dit is een weekend: kies een werkdag.'; return; }
+        el.textContent = v.pids.map(function (pid) {
+          return person(pid).name + ': ' + v.halves.map(function (h) { var s = slot(person(pid), d, h); return HALVES[h].toLowerCase() + ' ' + (s.absent ? s.absent.type.toLowerCase() : (s.text || 'leeg')) + ' → ' + v.text; }).join(', ');
+        }).join(' · ');
+      }
+      root.querySelectorAll('input,select').forEach(function (i) { i.addEventListener('change', preview); i.addEventListener('input', preview); });
+      preview();
+      root.querySelector('#pl-save').addEventListener('click', function () {
+        var v = vals(); if (!v.date || !v.pids.length || !v.text) { preview(); return; }
+        var d = parseIso(v.date); if (weekday(d) > 4) { preview(); return; }
+        var planId = 'plan' + Date.now(), procLines = root.querySelector('#pl-procs').value.split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+        var noteText = root.querySelector('#pl-note').value.trim(), doNotify = root.querySelector('#pl-notify').checked, newGaps = [];
+        v.halves.forEach(function (h) {
+          var before = countsFor(d, h, null), prevLoc = {};
+          v.pids.forEach(function (pid) { prevLoc[pid] = locOf(slot(person(pid), d, h).text); });
+          v.pids.forEach(function (pid) {
+            var k = keyOf(pid, v.date, h), old = slot(person(pid), d, h).text;
+            overrides.blocks[k] = v.text;
+            if (procLines.length) overrides.procs[k] = procLines.map(function (l) { var m = l.match(/^(\d{1,2}[:.]\d{2})\s+(.*)$/); return m ? { time: m[1].replace('.', ':'), name: m[2] } : { time: '', name: l }; });
+            else delete overrides.procs[k];
+            if (noteText) notes.push({ id: 'n' + Date.now() + pid, key: k, author: state.user, text: noteText, shared: true, ts: Date.now() });
+            if (doNotify && pid !== state.user) notify(pid, 'Nieuw ingepland door ' + person(state.user).name + ': ' + v.text + ' · ' + short(d) + ' ' + HALVES[h].toLowerCase() + (old && old !== v.text ? ' (was: ' + old + ')' : ''));
+          });
+          var after = countsFor(d, h, null);
+          CHECKS.forEach(function (k2) {
+            var n = needFor(d, h, k2);
+            if (k2 === 'Totaal' || !((before[k2] || 0) >= n && (after[k2] || 0) < n)) return;
+            var moved = v.pids.filter(function (pid) { return prevLoc[pid] === k2; })[0] || v.pids[0];
+            newGaps.push({ id: 'g' + Date.now() + Math.random().toString(36).slice(2, 6), reqId: planId, absent: moved, reason: 'herplanning', date: v.date, half: h, loc: k2, need: n, have: after[k2] || 0, status: 'open' });
+          });
+        });
+        addGaps(newGaps);
+        if (doNotify) notify('PLANNERS', person(state.user).name + ' plande ' + v.text + ' in voor ' + v.pids.map(function (x) { return person(x).name; }).join(', ') + ' · ' + short(d));
+        persist(); render();
+        if (newGaps.length) openGaps(function (g) { return g.reqId === planId; }, 'Ingepland · ' + newGaps.length + ' nieuw tekort');
+        else { closeSheet(); toast('Ingepland' + (doNotify ? ' en betrokkenen op de hoogte gebracht' : '')); }
+      });
+    });
+  }
+
+  /* =========================================================
+     Profiel en instellingen
+     ========================================================= */
+  var PROFILE_FIELDS = [['roepnaam', 'Roepnaam', 'Hoe collega’s je noemen'], ['telefoon', 'Diensttelefoon', 'Bijv. 06- of toestelnummer'], ['sein', 'Sein / pieper', ''],
+    ['aandacht', 'Aandachtsgebieden', 'Bijv. borstreconstructie, handchirurgie'], ['voorkeur', 'Voorkeuren voor de planning', 'Bijv. liever geen OK op vrijdagmiddag'], ['opmerking', 'Opmerking voor de planner', '']];
+  function contactOf(pid) {
+    if (!(canApprove() || pid === state.user)) return '';
+    var pr = profiles[pid] || {}, bits = [];
+    if (pr.telefoon) bits.push('tel ' + pr.telefoon); if (pr.sein) bits.push('sein ' + pr.sein);
+    return bits.length ? ' · ' + bits.join(' · ') : '';
+  }
+  function profileLine(pid) {
+    var pr = profiles[pid] || {}, bits = [];
+    PROFILE_FIELDS.forEach(function (f) { if (pr[f[0]]) bits.push(f[1] + ': ' + pr[f[0]]); });
+    return bits.join(' · ');
+  }
+  function openProfile() {
+    var me = person(state.user), pr = profiles[state.user] || {}, list = myNotifs().slice(0, 15);
+    var html = '<div class="profile-head"><span class="big">' + esc(isAdmin() ? '★' : me.id) + '</span><div><b style="font-size:1.1rem">' + esc((pr.roepnaam ? pr.roepnaam + ' · ' : '') + me.name) + '</b><div class="note">' + esc(me.group + ' · ' + roleLabel(me.id)) + '</div></div></div>' +
+      '<div class="card"><h3>Meldingen</h3>' + (list.length ? '<div class="notes">' + list.map(function (n) {
+        return '<div class="note-item' + (n.read ? '' : ' shared') + '"><span>' + esc(n.text) + '</span><span class="by"><span>' + esc(ago(n.ts)) + '</span>' + (n.read ? '' : '<span class="pill">nieuw</span>') + '</span></div>';
+      }).join('') + '</div>' : '<p class="empty">Geen meldingen.</p>') +
+      '<p class="note" style="margin:0">Demo: meldingen komen alleen binnen op dit toestel. Echte pushberichten naar andere telefoons vragen om een server.</p></div>';
+    if (!isAdmin()) html += '<div class="card"><h3>Vakantiesaldo</h3>' + saldoHtml(state.user) + '</div>';
+    html += '<div class="card"><h3>Over mij</h3><p class="note" style="margin:0">Zichtbaar voor de planner en de beheerder.</p>' + PROFILE_FIELDS.map(function (f) {
+      return '<label class="f">' + esc(f[1]) + (f[0] === 'voorkeur' || f[0] === 'opmerking' ? '<textarea data-pf="' + f[0] + '" rows="2" maxlength="300" placeholder="' + esc(f[2]) + '">' + esc(pr[f[0]] || '') + '</textarea>' : '<input data-pf="' + f[0] + '" maxlength="80" value="' + esc(pr[f[0]] || '') + '" placeholder="' + esc(f[2]) + '">') + '</label>';
+    }).join('') + '<button type="button" class="btn" id="pf-save">Opslaan</button></div>' +
+      '<div class="btn-row"><button type="button" class="btn secondary" id="pf-settings">Instellingen</button><button type="button" class="btn secondary" id="pf-switch">Wissel van gebruiker</button></div>';
+    openSheet('Mijn profiel', html, function (root) {
+      root.querySelector('#pf-save').addEventListener('click', function () {
+        var o = {}; root.querySelectorAll('[data-pf]').forEach(function (i) { var v = i.value.trim(); if (v) o[i.getAttribute('data-pf')] = v; });
+        profiles[state.user] = o; persist(); toast('Profiel opgeslagen');
+      });
+      root.querySelector('#pf-settings').addEventListener('click', function () { openSettings(); });
+      root.querySelector('#pf-switch').addEventListener('click', openWho);
+    });
+    myNotifs().forEach(function (n) { n.read = true; });
+    persist(); render();
+  }
+
+  var COLOR_KEYS = [['tint', 'Accentkleur (knoppen)', '--tint'], ['OK', 'OK', '--OK-bar'], ['POK', 'Poliklinische OK', '--POK-bar'], ['SU', 'Spreekuur', '--SU-bar'],
+    ['FK', 'Friesland Kliniek en Sneek', '--FK-bar'], ['VS', 'Visite en spoed', '--VS-bar'], ['OV', 'AO en overig', '--OV-bar'], ['AF', 'Afwezig', '--AF-bar']];
+  function toHex(v) {
+    v = (v || '').trim();
+    if (/^#[0-9a-f]{6}$/i.test(v)) return v.toLowerCase();
+    if (/^#[0-9a-f]{3}$/i.test(v)) return ('#' + v[1] + v[1] + v[2] + v[2] + v[3] + v[3]).toLowerCase();
+    return '#888888';
+  }
+  function openSettings(focus) {
     var fonts = [['systeem', 'Systeem'], ['rond', 'Rond'], ['klassiek', 'Klassiek'], ['leesbaar', 'Extra leesbaar']];
     var themes = [['auto', 'Automatisch'], ['light', 'Licht'], ['dark', 'Donker']];
-    var html = '<div class="card"><h3>Weergave</h3><div class="seg" role="group" aria-label="Thema">' + themes.map(function (t) { return '<button type="button" data-theme-opt="' + t[0] + '" aria-selected="' + (prefs.theme === t[0]) + '">' + t[1] + '</button>'; }).join('') + '</div></div>' +
-      '<div class="card"><h3>Lettertype</h3><div class="opts">' + fonts.map(function (f) { return '<button type="button" data-font-opt="' + f[0] + '" aria-pressed="' + (prefs.font === f[0]) + '" style="font-family:' + ({ systeem: '-apple-system,sans-serif', rond: 'ui-rounded,\'SF Pro Rounded\',sans-serif', klassiek: 'ui-serif,Georgia,serif', leesbaar: 'Verdana,sans-serif' }[f[0]]) + '">' + f[1] + '</button>'; }).join('') + '</div></div>' +
-      '<div class="card"><h3>Tekstgrootte</h3><div class="size-row"><span class="a1" aria-hidden="true">A</span><input type="range" id="size" min="0.85" max="1.4" step="0.05" value="' + prefs.scale + '" aria-label="Tekstgrootte"><span class="a2" aria-hidden="true">A</span></div><p class="note" id="size-val">' + Math.round(prefs.scale * 100) + '%</p></div>';
-    openSheet('Tekst en weergave', html, function (root) {
-      root.querySelectorAll('[data-theme-opt]').forEach(function (b) { b.addEventListener('click', function () { prefs.theme = b.getAttribute('data-theme-opt'); persist(); applyPrefs(); openTextSettings(); }); });
-      root.querySelectorAll('[data-font-opt]').forEach(function (b) { b.addEventListener('click', function () { prefs.font = b.getAttribute('data-font-opt'); persist(); applyPrefs(); openTextSettings(); }); });
+    var cs = getComputedStyle(document.documentElement), mine = prefs.colors[state.user] || {};
+    var perm = 'Notification' in window ? Notification.permission : 'unsupported';
+    var html = '<div class="card" id="set-colors"><h3>Mijn kleuren</h3><p class="note" style="margin:0">Alleen voor jouw account op dit toestel.</p><div class="colors">' + COLOR_KEYS.map(function (c) {
+      var val = toHex(mine[c[0]] || cs.getPropertyValue(c[2]));
+      var prev = c[0] === 'tint' ? '<span class="prev" style="background:var(--tint);color:var(--on-tint)">Knop</span>' : '<span class="prev t-' + c[0] + '"><span class="code">' + c[0] + '</span></span>';
+      return '<div class="color-row"><span class="sw">' + prev + '<span>' + esc(c[1]) + '</span></span><input type="color" data-color="' + c[0] + '" value="' + val + '" aria-label="Kleur voor ' + esc(c[1]) + '"></div>';
+    }).join('') + '</div><button type="button" class="btn secondary" id="set-reset">Standaardkleuren</button></div>' +
+      '<div class="card"><h3>Weergave</h3><div class="seg" role="group" aria-label="Thema">' + themes.map(function (t) { return '<button type="button" data-theme-opt="' + t[0] + '" aria-selected="' + (prefs.theme === t[0]) + '">' + t[1] + '</button>'; }).join('') + '</div></div>' +
+      '<div class="card" id="set-text"><h3>Lettertype</h3><div class="opts">' + fonts.map(function (f) { return '<button type="button" data-font-opt="' + f[0] + '" aria-pressed="' + (prefs.font === f[0]) + '" style="font-family:' + ({ systeem: '-apple-system,sans-serif', rond: 'ui-rounded,\'SF Pro Rounded\',sans-serif', klassiek: 'ui-serif,Georgia,serif', leesbaar: 'Verdana,sans-serif' }[f[0]]) + '">' + f[1] + '</button>'; }).join('') + '</div>' +
+      '<h3>Tekstgrootte</h3><div class="size-row"><span class="a1" aria-hidden="true">A</span><input type="range" id="size" min="0.85" max="1.4" step="0.05" value="' + prefs.scale + '" aria-label="Tekstgrootte"><span class="a2" aria-hidden="true">A</span></div><p class="note" id="size-val" style="margin:0">' + Math.round(prefs.scale * 100) + '%</p></div>' +
+      '<div class="card"><h3>Meldingen op dit toestel</h3><p class="note" style="margin:0">' + ({ granted: 'Aan.', denied: 'Geblokkeerd in de instellingen van je telefoon of browser.', 'default': 'Nog niet ingesteld.', unsupported: 'Niet ondersteund in deze browser. Op de iPhone werkt het alleen als de app op het beginscherm staat (iOS 16.4 of nieuwer).' }[perm]) + '</p>' +
+      (perm === 'default' ? '<button type="button" class="btn secondary" id="set-notif">Meldingen toestaan</button>' : '') + '</div>';
+    openSheet('Instellingen', html, function (root) {
+      root.querySelectorAll('[data-color]').forEach(function (i) {
+        i.addEventListener('input', function () {
+          var all = prefs.colors[state.user] || (prefs.colors[state.user] = {});
+          all[i.getAttribute('data-color')] = i.value; persist(); applyPrefs();
+        });
+        i.addEventListener('change', function () { render(); });
+      });
+      root.querySelector('#set-reset').addEventListener('click', function () { delete prefs.colors[state.user]; persist(); applyPrefs(); render(); openSettings(); });
+      root.querySelectorAll('[data-theme-opt]').forEach(function (b) { b.addEventListener('click', function () { prefs.theme = b.getAttribute('data-theme-opt'); persist(); applyPrefs(); openSettings(); }); });
+      root.querySelectorAll('[data-font-opt]').forEach(function (b) { b.addEventListener('click', function () { prefs.font = b.getAttribute('data-font-opt'); persist(); applyPrefs(); openSettings('tekst'); }); });
       root.querySelector('#size').addEventListener('input', function (e) { prefs.scale = +e.target.value; root.querySelector('#size-val').textContent = Math.round(prefs.scale * 100) + '%'; persist(); applyPrefs(); });
+      var nb = root.querySelector('#set-notif');
+      if (nb) nb.addEventListener('click', function () { Notification.requestPermission().then(function () { openSettings(); }); });
+      if (focus === 'tekst') { var tx = root.querySelector('#set-text'); if (tx) setTimeout(function () { tx.scrollIntoView({ block: 'start' }); }, 30); }
     });
   }
 
@@ -806,7 +1188,7 @@
     applyPrefs();
     if (!state.user || !person(state.user)) { main.innerHTML = ''; openWho(); return; }
     var me = person(state.user);
-    var tabs = ['agenda', 'team', 'bezetting', 'afwezig'];
+    var tabs = canApprove() ? ['agenda', 'team', 'bezetting', 'afwezig'] : ['agenda', 'afwezig'];
     if (isAdmin()) tabs.push('beheer');
     if (tabs.indexOf(state.tab) < 0) state.tab = 'agenda';
     var pend = canApprove() ? requests.filter(function (r) { return r.status === 'pending' && r.person !== state.user; }).length : 0;
@@ -816,7 +1198,11 @@
     }).join('');
     document.querySelectorAll('.tab').forEach(function (b) { b.addEventListener('click', function () { state.tab = b.getAttribute('data-tab'); save('rp.tab', state.tab); window.scrollTo(0, 0); render(); }); });
 
-    document.getElementById('who-btn').textContent = isAdmin() ? '★' : me.id;
+    var unread = myNotifs().filter(function (n) { return !n.read; }).length;
+    var wb = document.getElementById('who-btn');
+    wb.innerHTML = esc(isAdmin() ? '★' : me.id) + (unread ? '<span class="badge" style="top:-4px;left:auto;right:-6px">' + unread + '</span>' : '');
+    wb.style.position = 'relative';
+    wb.setAttribute('aria-label', 'Mijn profiel' + (unread ? ', ' + unread + ' nieuwe meldingen' : ''));
     var c = state.cursor, title = document.getElementById('big-title'), sub = document.getElementById('subtitle');
     var seg = document.getElementById('view-seg'), arrows = document.getElementById('nav-arrows');
     seg.hidden = state.tab !== 'agenda';
@@ -849,13 +1235,17 @@
   document.getElementById('prev-btn').addEventListener('click', function () { step(-1); });
   document.getElementById('next-btn').addEventListener('click', function () { step(1); });
   document.getElementById('today-btn').addEventListener('click', function () { state.cursor = startOfDay(new Date()); render(); });
-  document.getElementById('who-btn').addEventListener('click', openWho);
-  document.getElementById('text-btn').addEventListener('click', openTextSettings);
+  document.getElementById('who-btn').addEventListener('click', function () { if (state.user) openProfile(); else openWho(); });
+  document.getElementById('text-btn').addEventListener('click', function () { openSettings('tekst'); });
+  document.getElementById('settings-btn').addEventListener('click', function () { openSettings(); });
   document.getElementById('theme-btn').addEventListener('click', function () {
     var dark = document.documentElement.getAttribute('data-theme') === 'dark';
     prefs.theme = dark ? 'light' : 'dark'; persist(); applyPrefs(); toast(dark ? 'Lichte weergave' : 'Donkere weergave');
   });
-  document.getElementById('add-btn').addEventListener('click', function () { openRequest(isAdmin() ? viewPerson().id : state.user, iso(state.cursor), 'dag'); });
+  document.getElementById('add-btn').addEventListener('click', function () {
+    if (canApprove()) openPlanChoice(viewPerson().id, iso(state.cursor), 0);
+    else openRequest(state.user, iso(state.cursor), 'dag');
+  });
   document.addEventListener('keydown', function (e) {
     if (sheet.open || /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
     if (e.key === 'ArrowLeft') step(-1); else if (e.key === 'ArrowRight') step(1); else if (e.key === 't') { state.cursor = startOfDay(new Date()); render(); }
