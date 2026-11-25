@@ -8,7 +8,7 @@
   var PEOPLE = D.people;
   var ADMIN = { id: 'ADMIN', name: 'Beheerder', group: 'Beheer', role: 'admin', note: '' };
   var CONFIG = window.RP_CONFIG || {};
-  var APP_VERSION = '6 · 25 nov 2026';
+  var APP_VERSION = '7 · 25 nov 2026';
   PEOPLE.concat([ADMIN]).forEach(function (p) { p.baseName = p.name; });
   function usernameOf(id) { if (id === 'ADMIN') return 'beheerder'; var p = person(id); return p.baseName.toLowerCase().replace(/\s+/g, '-'); }
   function defaultPw(id) { return id === 'ADMIN' ? '1234' : 'welkom'; }
@@ -1505,7 +1505,6 @@
   document.getElementById('next-btn').addEventListener('click', function () { step(1); });
   document.getElementById('today-btn').addEventListener('click', function () { state.cursor = startOfDay(new Date()); render(); });
   document.getElementById('who-btn').addEventListener('click', function () { if (state.user) openProfile(); else openWho(); });
-  document.getElementById('text-btn').addEventListener('click', function () { openSettings('tekst'); });
   document.getElementById('settings-btn').addEventListener('click', function () { openSettings(); });
   document.getElementById('feedback-btn').addEventListener('click', function () { state.tab = 'feedback'; window.scrollTo(0, 0); render(); });
   document.getElementById('theme-btn').addEventListener('click', function () {
