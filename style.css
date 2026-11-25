@@ -331,3 +331,13 @@ body.logged-out .layout { display: block; padding: 0; }
 .warn { font-size: .85rem; font-weight: 600; padding: .55rem .7rem; border-radius: 10px; background: var(--amber-bg); color: var(--amber-ink); box-shadow: inset 0 0 0 1px var(--amber-line); }
 .warn[hidden] { display: none; }
 .widget { flex: none; }
+
+/* ---------- v6: zachte kleuren (minder hard zwart-wit) ---------- */
+[data-theme="light"][data-tone="zacht"] {
+  --bg: #ECEAE6; --surface: #F8F7F4; --surface2: #E8E6E1; --ink: #2E2D2B; --muted: #625F5A; --line: #D6D3CC; --hair: #E1DED7;
+}
+[data-theme="dark"][data-tone="zacht"] {
+  --bg: #1C1D20; --surface: #26272B; --surface2: #313237; --ink: #E4E1DA; --muted: #A8A59E; --line: #3D3E44; --hair: #313237;
+}
+[data-theme="light"][data-tone="zacht"] .seg { background: #E0DDD7; }
+.saldo-label { font-size: .78rem; font-weight: 700; color: var(--muted); margin-top: .2rem; }

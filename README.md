@@ -15,13 +15,14 @@ Op de iPhone: open de link in Safari → Deel → **Zet op beginscherm**.
 - **Beheerder**-login (demo-code 1234): blokken en ingrepen aanpassen, rechten, notities, export
 - **Planner/beheerder plant in** vanuit de agenda (+ of lang drukken → Inplannen); betrokkenen krijgen een melding
 - **Tekorten** na goedkeuren of herplannen: zichtbaar in de agenda, met voorstel voor een invaller of een notitie
-- **Vakantiesaldo in uren** per persoon (1 dag = 8 u); vakantie minimaal 12 weken vooraf
+- **Saldo in dagen**: vakantie (standaard 7 weken + eventueel sabbatical) en congres (standaard 2 weken), naar rato van werkdagen per week; vakantie minimaal 12 weken vooraf
 - **Inloggen** per account (gebruikersnaam + wachtwoord; demo: wachtwoorden alleen op dit toestel)
 - **Profiel** via je eigen pictogram: naam, e-mail, 06, meldingen, wachtwoord wijzigen, uitloggen
 - **Afwezigheid naast de planning** (zoals Apple Agenda); gearceerd = aangevraagd, effen = goedgekeurd; ziekmelding verwijderen
 - **Verbeterpunten**-tab (bovenbalk): gaat alleen naar de beheerder (e-mailadres in `config.js`)
 - **Widgets** op de computer: per account toevoegen, inklappen en verwijderen
-- **Instellingen**: eigen kleuren per account, donkere modus, lettertype en tekstgrootte
+- **Instellingen**: eigen kleuren per account, zachte kleuren, donkere modus, lettertype en tekstgrootte
+- Werkt zichzelf automatisch bij op telefoons die de app op het beginscherm hebben
 - Team en Bezetting alleen voor planner en beheerder
 
 ## Let op

@@ -8,6 +8,7 @@
   var PEOPLE = D.people;
   var ADMIN = { id: 'ADMIN', name: 'Beheerder', group: 'Beheer', role: 'admin', note: '' };
   var CONFIG = window.RP_CONFIG || {};
+  var APP_VERSION = '6 · 25 nov 2026';
   PEOPLE.concat([ADMIN]).forEach(function (p) { p.baseName = p.name; });
   function usernameOf(id) { if (id === 'ADMIN') return 'beheerder'; var p = person(id); return p.baseName.toLowerCase().replace(/\s+/g, '-'); }
   function defaultPw(id) { return id === 'ADMIN' ? '1234' : 'welkom'; }
@@ -118,6 +119,12 @@
   /* =========================================================
      Opslag
      ========================================================= */
+  /* Gemiddeld aantal werkdagen per week volgens het basisrooster (even + oneven) */
+  function rosterDays(p) {
+    var tot = 0;
+    ['e', 'o'].forEach(function (w) { for (var d = 0; d < 5; d++) if (p[w][d * 2] || p[w][d * 2 + 1]) tot += 1; });
+    return Math.round(tot) / 2;
+  }
   var prefs = load('rp.prefs', {});
   if (!prefs.theme) prefs.theme = 'auto';
   if (!prefs.font) prefs.font = 'systeem';
@@ -128,8 +135,14 @@
   var rights = load('rp.rights', {});
   PEOPLE.forEach(function (p) {
     if (!rights[p.id]) rights[p.id] = { role: p.role, canShare: p.role !== 'aios' };
-    if (rights[p.id].vakRecht == null) rights[p.id].vakRecht = p.group === 'Specialist' ? 272 : 200;
-    if (rights[p.id].vakAl == null) rights[p.id].vakAl = 0;
+    var r0 = rights[p.id];
+    if (r0.werkdagen == null) r0.werkdagen = rosterDays(p);
+    if (r0.vakWeken == null) r0.vakWeken = 7;
+    if (r0.conWeken == null) r0.conWeken = 2;
+    if (r0.sabbatical == null) r0.sabbatical = 0;
+    if (r0.vakAlD == null) r0.vakAlD = 0;
+    if (r0.conAlD == null) r0.conAlD = 0;
+    delete r0.vakRecht; delete r0.vakAl;
   });
   var gaps = load('rp.gaps', []);
   var profiles = load('rp.profiles', {});
@@ -225,22 +238,42 @@
     return n;
   }
   function daysIn(r) { return String(daysNum(r)).replace('.', ','); }
-  /* Vakantie-uren: een werkdag is 8 uur, een dagdeel 4 uur */
-  function hoursOf(r) { return daysNum(r) * 8; }
-  function fmtH(h) { return String(Math.round(h * 10) / 10).replace('.', ',') + ' u'; }
+  /* Saldo in dagen. Alleen dagdelen waarop iemand volgens het basisrooster werkt, tellen mee. */
+  function workDaysOf(r) {
+    var p = person(r.person), n = 0, d = parseIso(r.from), end = parseIso(r.to), g = 0;
+    while (d <= end && g++ < 400) {
+      var wd = weekday(d);
+      if (wd < 5 && p && p[parityOf(d)]) for (var h = 0; h < 2; h++) if (covers(r, iso(d), h) && p[parityOf(d)][wd * 2 + h]) n += 0.5;
+      d = addDays(d, 1);
+    }
+    return n;
+  }
+  function fmtD(n) { n = Math.round(n * 10) / 10; return String(n).replace('.', ',') + (Math.abs(n) === 1 ? ' dag' : ' dagen'); }
+  function kindOf(type) { return type === 'Vakantie' ? 'vak' : (type === 'Congres' || type === 'Congres organisatie') ? 'con' : null; }
   function saldoOf(pid) {
-    var rt = rights[pid] || { vakRecht: 0, vakAl: 0 }, op = rt.vakAl || 0, aanv = 0;
+    var rt = rights[pid] || {}, wd = rt.werkdagen || 0;
+    var out = {
+      vak: { recht: ((rt.vakWeken || 0) + (rt.sabbatical || 0)) * wd, op: rt.vakAlD || 0, aanv: 0 },
+      con: { recht: (rt.conWeken || 0) * wd, op: rt.conAlD || 0, aanv: 0 }
+    };
     requests.forEach(function (r) {
-      if (r.person !== pid || r.type !== 'Vakantie') return;
-      if (r.status === 'approved') op += hoursOf(r); else if (r.status === 'pending') aanv += hoursOf(r);
+      var k = kindOf(r.type); if (r.person !== pid || !k) return;
+      if (r.status === 'approved') out[k].op += workDaysOf(r); else if (r.status === 'pending') out[k].aanv += workDaysOf(r);
     });
-    return { recht: rt.vakRecht || 0, op: op, aanv: aanv, saldo: (rt.vakRecht || 0) - op };
+    ['vak', 'con'].forEach(function (k) { out[k].saldo = out[k].recht - out[k].op; });
+    return out;
+  }
+  function fmtN(n) { return String(Math.round(n * 10) / 10).replace('.', ','); }
+  function saldoRow(label, s) {
+    return '<div class="saldo-label">' + label + ' · in dagen</div><div class="saldo"><div><b>' + fmtN(s.recht) + '</b><span>Recht op</span></div><div><b>' + fmtN(s.op) + '</b><span>Opgenomen</span></div>' +
+      '<div><b>' + fmtN(s.aanv) + '</b><span>Aangevraagd</span></div><div class="' + (s.saldo < 0 ? 'neg' : '') + '"><b>' + fmtN(s.saldo) + '</b><span>Over</span></div></div>';
   }
   function saldoHtml(pid) {
-    var s = saldoOf(pid);
-    return '<div class="saldo"><div><b>' + fmtH(s.recht) + '</b><span>Recht op</span></div><div><b>' + fmtH(s.op) + '</b><span>Opgenomen</span></div>' +
-      '<div><b>' + fmtH(s.aanv) + '</b><span>In aanvraag</span></div><div class="' + (s.saldo < 0 ? 'neg' : '') + '"><b>' + fmtH(s.saldo) + '</b><span>Saldo</span></div></div>';
+    var s = saldoOf(pid), rt = rights[pid] || {};
+    return saldoRow('Vakantie', s.vak) + saldoRow('Congres', s.con) +
+      '<p class="note" style="margin:0">' + String(rt.werkdagen).replace('.', ',') + ' werkdagen per week · ' + (rt.vakWeken || 0) + ' weken vakantie' + (rt.sabbatical ? ' + ' + rt.sabbatical + ' weken sabbatical' : '') + ' · ' + (rt.conWeken || 0) + ' weken congres</p>';
   }
+
 
   /* =========================================================
      Toestand
@@ -267,6 +300,7 @@
   function applyPrefs() {
     var dark = prefs.theme === 'dark' || (prefs.theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-tone', prefs.tone || 'zacht');
     document.documentElement.setAttribute('data-font', prefs.font);
     document.documentElement.style.setProperty('--scale', prefs.scale);
     var rs = document.documentElement.style, c = (prefs.colors && prefs.colors[state.user]) || {};
@@ -459,11 +493,12 @@
         send.style.opacity = blocked ? '.45' : '';
         send.textContent = st === 'approved' ? 'Vastleggen' : 'Aanvraag indienen';
         var sb = root.querySelector('#rq-saldo');
-        if (kind === 'Vakantie') {
-          var sa = saldoOf(r.person), h = hoursOf(r), after = sa.saldo - sa.aanv - h;
+        var kk = kindOf(kind);
+        if (kk) {
+          var sa = saldoOf(r.person)[kk], n = workDaysOf(r), after = sa.saldo - sa.aanv - n;
           sb.hidden = false;
-          sb.innerHTML = '<h3>Vakantiesaldo' + (r.person !== state.user ? ' · ' + esc(person(r.person).name) : '') + '</h3>' + saldoHtml(r.person) +
-            '<p class="note" style="margin:0">Deze aanvraag: ' + daysIn(r) + ' werkdag(en) = <b>' + fmtH(h) + '</b>. Saldo daarna: <b' + (after < 0 ? ' style="color:var(--low-ink)"' : '') + '>' + fmtH(after) + '</b>.</p>';
+          sb.innerHTML = '<h3>' + (kk === 'vak' ? 'Vakantie' : 'Congres') + 'dagen' + (r.person !== state.user ? ' · ' + esc(person(r.person).name) : '') + '</h3>' + saldoRow(kk === 'vak' ? 'Vakantie' : 'Congres', sa) +
+            '<p class="note" style="margin:0">Deze aanvraag: <b>' + fmtD(n) + '</b> (alleen dagen die je volgens het rooster werkt). Daarna over: <b' + (after < 0 ? ' style="color:var(--low-ink)"' : '') + '>' + fmtD(after) + '</b>.</p>';
         } else { sb.hidden = true; sb.innerHTML = ''; }
         var el = root.querySelector('#rq-impact');
         if (el) {
@@ -790,7 +825,7 @@
     var st = { pending: ['p', 'Aangevraagd'], approved: ['a', 'Goedgekeurd'], declined: ['d', 'Afgewezen'] }[r.status];
     var when = short(parseIso(r.from)) + (r.fromPart === 'middag' ? ' (middag)' : '') + (r.to !== r.from || r.toPart === 'ochtend' ? ' – ' + short(parseIso(r.to)) + (r.toPart === 'ochtend' ? ' (ochtend)' : '') : '');
     var html = '<div class="req' + (r.status === 'pending' ? ' pending' : '') + '"><div class="top-line"><b>' + esc(opts.showName ? p.name + ' · ' + r.type : r.type) + '</b><span class="status ' + st[0] + '">' + st[1] + '</span></div>' +
-      '<span class="note">' + esc(when + ' · ' + daysIn(r) + ' werkdag(en)' + (r.type === 'Vakantie' ? ' · ' + fmtH(hoursOf(r)) : '') + (r.note ? ' · ' + r.note : '')) + '</span>';
+      '<span class="note">' + esc(when + ' · ' + daysIn(r) + ' werkdag(en)' + (kindOf(r.type) ? ' · telt ' + fmtD(workDaysOf(r)) : '') + (r.note ? ' · ' + r.note : '')) + '</span>';
     if (tooLate(r)) html += '<span class="impact">Aangevraagd binnen ' + VAK_WEEKS + ' weken (' + Math.max(0, Math.floor(leadDays(r) / 7)) + ' weken van tevoren)</span>';
     if (opts.review) {
       var imp = impactOf(r);
@@ -836,7 +871,7 @@
     var p = person(r.person), pend = r.status !== 'approved';
     var when = longDate(parseIso(r.from)) + (r.fromPart === 'middag' ? ' (vanaf middag)' : '') + (r.to !== r.from || r.toPart === 'ochtend' ? ' t/m ' + longDate(parseIso(r.to)) + (r.toPart === 'ochtend' ? ' (ochtend)' : '') : '');
     var html = '<div class="event t-AF' + (pend ? ' pend' : '') + '" style="cursor:default"><div class="body"><div class="ttl"><span class="code">' + absLetter(r) + '</span><span class="t">' + esc(r.type) + '</span><span class="stat">' + (pend ? 'Aangevraagd' : 'Goedgekeurd') + '</span></div><div class="meta">' + esc(when) + '</div></div></div>' +
-      '<dl class="kv"><dt>Wie</dt><dd>' + esc(p.name) + '</dd><dt>Duur</dt><dd>' + daysIn(r) + ' werkdag(en)' + (r.type === 'Vakantie' ? ' · ' + fmtH(hoursOf(r)) : '') + '</dd>' +
+      '<dl class="kv"><dt>Wie</dt><dd>' + esc(p.name) + '</dd><dt>Duur</dt><dd>' + daysIn(r) + ' werkdag(en)' + (kindOf(r.type) ? ' · telt ' + fmtD(workDaysOf(r)) : '') + '</dd>' +
       (r.note ? '<dt>Toelichting</dt><dd>' + esc(r.note) + '</dd>' : '') + (r.by && r.by !== r.person ? '<dt>Ingevoerd door</dt><dd>' + esc(person(r.by) ? person(r.by).name : r.by) + '</dd>' : '') + '</dl>' +
       '<p class="note">De planning van die dag blijft gewoon staan; de afwezigheid staat ernaast. ' + (pend ? 'Gearceerd = nog niet goedgekeurd.' : 'Effen = goedgekeurd.') + '</p>';
     if (canApprove() && pend && r.person !== state.user) {
@@ -870,7 +905,7 @@
       html += '<section class="card"><h2>Te beoordelen</h2>' + (pend.length ? pend.map(function (r) { return reqHtml(r, { showName: true, review: true }); }).join('') : '<p class="empty">Geen open aanvragen.</p>') + '</section>';
     }
     if (!isAdmin()) {
-      html += '<section class="card"><h2>Mijn vakantiesaldo</h2>' + saldoHtml(state.user) + '<p class="note" style="margin:0">1 werkdag = 8 uur, 1 dagdeel = 4 uur.</p></section>';
+      html += '<section class="card"><h2>Mijn vakantie- en congresdagen</h2>' + saldoHtml(state.user) + '<p class="note" style="margin:0">Een dagdeel telt als een halve dag. Alleen dagen die je volgens het rooster werkt, gaan van je saldo af.</p></section>';
       html += '<div class="btn-row"><button type="button" class="btn" id="new-req">Vrij vragen</button><button type="button" class="btn danger" id="sick-today">Ziek vandaag</button></div>';
       html += '<p class="note">Vakantie vraag je minimaal ' + VAK_WEEKS + ' weken van tevoren aan; eerst mogelijke dag nu: ' + longDate(earliestVacation()) + '. Aanvragen worden goedgekeurd door de planner of beheerder.</p>';
       var mine = requests.filter(function (r) { return r.person === state.user; }).sort(function (a, b) { return a.from < b.from ? 1 : -1; });
@@ -893,8 +928,10 @@
       return '<div class="pp"><span class="nm">' + esc(p.name) + ' <span class="pill">' + esc(p.group) + '</span></span>' +
         '<select data-role="' + p.id + '" aria-label="Rol van ' + esc(p.name) + '"><option value="specialist"' + (r.role === 'specialist' ? ' selected' : '') + '>Specialist</option><option value="aios"' + (r.role === 'aios' ? ' selected' : '') + '>AIOS / ANIOS</option><option value="beheer"' + (r.role === 'beheer' ? ' selected' : '') + '>Planner</option></select>' +
         '<label><input type="checkbox" data-share-right="' + p.id + '"' + (r.canShare ? ' checked' : '') + '> Notities delen</label>' +
-        '<label>Recht op <input type="number" min="0" step="4" data-vak="' + p.id + '" value="' + r.vakRecht + '" style="width:5rem;min-height:40px;border-radius:8px;border:1px solid var(--line);background:var(--surface2);padding:0 .4rem"> u</label>' +
-        '<label>Al opgenomen <input type="number" min="0" step="4" data-vakal="' + p.id + '" value="' + r.vakAl + '" style="width:5rem;min-height:40px;border-radius:8px;border:1px solid var(--line);background:var(--surface2);padding:0 .4rem"> u</label>' +
+        [['werkdagen', 'Werkdagen p/w', 0.5], ['vakWeken', 'Vakantie (weken)', 1], ['sabbatical', 'Sabbatical (extra weken)', 1], ['conWeken', 'Congres (weken)', 1], ['vakAlD', 'Al opgenomen vakantie (dagen)', 0.5], ['conAlD', 'Al opgenomen congres (dagen)', 0.5]].map(function (f) {
+          return '<label>' + f[1] + ' <input type="number" min="0" step="' + f[2] + '" data-right="' + p.id + '|' + f[0] + '" value="' + r[f[0]] + '" style="width:4.2rem;min-height:40px;border-radius:8px;border:1px solid var(--line);background:var(--surface2);padding:0 .4rem"></label>';
+        }).join('') +
+        '<span class="note" style="flex-basis:100%">Recht op: ' + fmtD(((r.vakWeken || 0) + (r.sabbatical || 0)) * r.werkdagen) + ' vakantie, ' + fmtD((r.conWeken || 0) * r.werkdagen) + ' congres</span>' +
         (profileLine(p.id) ? '<span class="note" style="flex-basis:100%">' + esc(profileLine(p.id)) + '</span>' : '') + '</div>';
     }).join('') + '</div></section>';
     html += '<section class="card"><h2>Aangepaste blokken</h2>' + (edited.length ? edited.map(function (k) {
@@ -914,8 +951,7 @@
     main.innerHTML = html;
     bindReqButtons();
     main.querySelectorAll('[data-role]').forEach(function (s) { s.addEventListener('change', function () { rights[s.getAttribute('data-role')].role = s.value; persist(); toast('Rol aangepast'); }); });
-    main.querySelectorAll('[data-vak]').forEach(function (i) { i.addEventListener('change', function () { rights[i.getAttribute('data-vak')].vakRecht = Math.max(0, +i.value || 0); persist(); toast('Vakantierecht aangepast'); }); });
-    main.querySelectorAll('[data-vakal]').forEach(function (i) { i.addEventListener('change', function () { rights[i.getAttribute('data-vakal')].vakAl = Math.max(0, +i.value || 0); persist(); toast('Opgenomen uren aangepast'); }); });
+    main.querySelectorAll('[data-right]').forEach(function (i) { i.addEventListener('change', function () { var a = i.getAttribute('data-right').split('|'); rights[a[0]][a[1]] = Math.max(0, +String(i.value).replace(',', '.') || 0); persist(); render(); toast('Aangepast'); }); });
     main.querySelectorAll('[data-share-right]').forEach(function (c) { c.addEventListener('change', function () { rights[c.getAttribute('data-share-right')].canShare = c.checked; persist(); }); });
     main.querySelectorAll('[data-undo]').forEach(function (b) { b.addEventListener('click', function () { var k = b.getAttribute('data-undo'); delete overrides.blocks[k]; delete overrides.procs[k]; persist(); render(); }); });
     main.querySelectorAll('[data-del-note]').forEach(function (b) { b.addEventListener('click', function () { notes = notes.filter(function (n) { return n.id !== b.getAttribute('data-del-note'); }); persist(); render(); }); });
@@ -1175,7 +1211,7 @@
       '<div class="card"><h3>Meldingen</h3>' + (list.length ? '<div class="notes">' + list.map(function (n) {
         return '<div class="note-item' + (n.read ? '' : ' shared') + '"><span>' + esc(n.text) + '</span><span class="by"><span>' + esc(ago(n.ts)) + '</span>' + (n.read ? '' : '<span class="pill">nieuw</span>') + '</span></div>';
       }).join('') + '</div>' : '<p class="empty">Geen meldingen.</p>') + '</div>';
-    if (!isAdmin()) html += '<div class="card"><h3>Vakantiesaldo</h3>' + saldoHtml(state.user) + '</div>';
+    if (!isAdmin()) html += '<div class="card"><h3>Vakantie- en congresdagen</h3>' + saldoHtml(state.user) + '</div>';
     html += '<div class="card"><h3>Over mij</h3><p class="note" style="margin:0">Zichtbaar voor de planner en de beheerder.</p>' + PROFILE_FIELDS.map(function (f) {
       return '<label class="f">' + esc(f[1]) + '<input data-pf="' + f[0] + '" type="' + f[4] + '" autocomplete="' + f[3] + '" maxlength="80" value="' + esc(pr[f[0]] || '') + '" placeholder="' + esc(f[2]) + '"></label>';
     }).join('') + '<button type="button" class="btn" id="pf-save">Opslaan</button></div>' +
@@ -1224,11 +1260,13 @@
       var prev = c[0] === 'tint' ? '<span class="prev" style="background:var(--tint);color:var(--on-tint)">Knop</span>' : '<span class="prev t-' + c[0] + '"><span class="code">' + c[0] + '</span></span>';
       return '<div class="color-row"><span class="sw">' + prev + '<span>' + esc(c[1]) + '</span></span><input type="color" data-color="' + c[0] + '" value="' + val + '" aria-label="Kleur voor ' + esc(c[1]) + '"></div>';
     }).join('') + '</div><button type="button" class="btn secondary" id="set-reset">Standaardkleuren</button></div>' +
-      '<div class="card"><h3>Weergave</h3><div class="seg" role="group" aria-label="Thema">' + themes.map(function (t) { return '<button type="button" data-theme-opt="' + t[0] + '" aria-selected="' + (prefs.theme === t[0]) + '">' + t[1] + '</button>'; }).join('') + '</div></div>' +
+      '<div class="card"><h3>Weergave</h3><div class="seg" role="group" aria-label="Thema">' + themes.map(function (t) { return '<button type="button" data-theme-opt="' + t[0] + '" aria-selected="' + (prefs.theme === t[0]) + '">' + t[1] + '</button>'; }).join('') + '</div>' +
+      '<label class="toggle">Zachte kleuren (minder hard contrast)<input type="checkbox" id="set-tone"' + ((prefs.tone || 'zacht') === 'zacht' ? ' checked' : '') + '></label></div>' +
       '<div class="card" id="set-text"><h3>Lettertype</h3><div class="opts">' + fonts.map(function (f) { return '<button type="button" data-font-opt="' + f[0] + '" aria-pressed="' + (prefs.font === f[0]) + '" style="font-family:' + ({ systeem: '-apple-system,sans-serif', rond: 'ui-rounded,\'SF Pro Rounded\',sans-serif', klassiek: 'ui-serif,Georgia,serif', leesbaar: 'Verdana,sans-serif' }[f[0]]) + '">' + f[1] + '</button>'; }).join('') + '</div>' +
       '<h3>Tekstgrootte</h3><div class="size-row"><span class="a1" aria-hidden="true">A</span><input type="range" id="size" min="0.85" max="1.4" step="0.05" value="' + prefs.scale + '" aria-label="Tekstgrootte"><span class="a2" aria-hidden="true">A</span></div><p class="note" id="size-val" style="margin:0">' + Math.round(prefs.scale * 100) + '%</p></div>' +
       '<div class="card"><h3>Meldingen op dit toestel</h3><p class="note" style="margin:0">' + ({ granted: 'Aan.', denied: 'Geblokkeerd in de instellingen van je telefoon of browser.', 'default': 'Nog niet ingesteld.', unsupported: 'Niet ondersteund in deze browser. Op de iPhone werkt het alleen als de app op het beginscherm staat (iOS 16.4 of nieuwer).' }[perm]) + '</p>' +
       (perm === 'default' ? '<button type="button" class="btn secondary" id="set-notif">Meldingen toestaan</button>' : '') + '</div>';
+    html += '<p class="note" style="text-align:center">Versie ' + APP_VERSION + '</p>';
     openSheet('Instellingen', html, function (root) {
       root.querySelectorAll('[data-color]').forEach(function (i) {
         i.addEventListener('input', function () {
@@ -1240,6 +1278,7 @@
       root.querySelector('#set-reset').addEventListener('click', function () { delete prefs.colors[state.user]; persist(); applyPrefs(); render(); openSettings(); });
       root.querySelectorAll('[data-theme-opt]').forEach(function (b) { b.addEventListener('click', function () { prefs.theme = b.getAttribute('data-theme-opt'); persist(); applyPrefs(); openSettings(); }); });
       root.querySelectorAll('[data-font-opt]').forEach(function (b) { b.addEventListener('click', function () { prefs.font = b.getAttribute('data-font-opt'); persist(); applyPrefs(); openSettings('tekst'); }); });
+      root.querySelector('#set-tone').addEventListener('change', function (e) { prefs.tone = e.target.checked ? 'zacht' : 'standaard'; persist(); applyPrefs(); });
       root.querySelector('#size').addEventListener('input', function (e) { prefs.scale = +e.target.value; root.querySelector('#size-val').textContent = Math.round(prefs.scale * 100) + '%'; persist(); applyPrefs(); });
       var nb = root.querySelector('#set-notif');
       if (nb) nb.addEventListener('click', function () { Notification.requestPermission().then(function () { openSettings(); }); });
@@ -1333,7 +1372,7 @@
     vandaag: { title: 'Vandaag', who: 'all' },
     mini: { title: 'Kalender', who: 'all' },
     meldingen: { title: 'Meldingen', who: 'all' },
-    saldo: { title: 'Vakantiesaldo', who: 'staff' },
+    saldo: { title: 'Vakantie en congres', who: 'staff' },
     aanvragen: { title: 'Open aanvragen', who: 'planner' },
     tekorten: { title: 'Open tekorten', who: 'planner' },
     team: { title: 'Team vandaag', who: 'planner' },
@@ -1486,7 +1525,16 @@
   var standalone = window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
   if (isIos && !standalone && !load('rp.hintClosed', false)) document.getElementById('install-hint').hidden = false;
   document.getElementById('install-close').addEventListener('click', function () { document.getElementById('install-hint').hidden = true; save('rp.hintClosed', true); });
-  if ('serviceWorker' in navigator) window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  if ('serviceWorker' in navigator) {
+    var hadController = !!navigator.serviceWorker.controller, reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function () { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {
+        reg.update();
+        document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') reg.update(); });
+      }).catch(function () {});
+    });
+  }
 
   render();
 })();
