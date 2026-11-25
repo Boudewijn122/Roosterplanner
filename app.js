@@ -339,6 +339,17 @@
     toast((pid === state.user ? 'Je bent' : p.name + ' is') + ' ziek gemeld voor ' + short(d) + (half == null ? '' : ' ' + HALVES[half].toLowerCase()));
   }
 
+  /* Vakantie: minimaal 12 weken van tevoren; alleen planner of beheerder keurt goed */
+  var VAK_WEEKS = 12;
+  function earliestVacation() { return addDays(startOfDay(new Date()), VAK_WEEKS * 7); }
+  function leadDays(r) { return Math.round((parseIso(r.from) - startOfDay(new Date(r.created || Date.now()))) / 86400000); }
+  function tooLate(r) { return r.type === 'Vakantie' && leadDays(r) < VAK_WEEKS * 7; }
+  function statusFor(r) {
+    if (isAdmin()) return 'approved';
+    if (canApprove() && r.person !== state.user) return 'approved';
+    return 'pending';
+  }
+
   function openRequest(pid, fromIso, fromPart) {
     var who = canApprove() ? (pid || state.user) : state.user;
     if (who === 'ADMIN') who = viewPerson().id;
@@ -346,13 +357,15 @@
     var pplOpts = canApprove() ? '<label class="f">Voor wie<select id="rq-person">' + PEOPLE.map(function (p) { return '<option value="' + p.id + '"' + (p.id === who ? ' selected' : '') + '>' + esc(p.name) + '</option>'; }).join('') + '</select></label>' : '';
     var html = pplOpts +
       '<div class="opts" role="group" aria-label="Soort">' + TYPES.map(function (k) { return '<button type="button" data-kind="' + esc(k) + '" aria-pressed="' + (k === kind) + '">' + esc(k) + '</button>'; }).join('') + '</div>' +
+      '<p class="note" id="rq-rule"></p>' +
       '<div class="grid2"><label class="f">Van<input type="date" id="rq-from" value="' + fromIso + '"></label>' +
       '<label class="f">Vanaf<select id="rq-fromPart"><option value="dag">Hele dag</option><option value="middag"' + (fromPart === 'middag' ? ' selected' : '') + '>Middag</option></select></label>' +
       '<label class="f">Tot en met<input type="date" id="rq-to" value="' + fromIso + '"></label>' +
       '<label class="f">Tot en met<select id="rq-toPart"><option value="dag">Hele dag</option><option value="ochtend">Ochtend</option></select></label></div>' +
       '<label class="f">Toelichting<textarea id="rq-note" rows="2" maxlength="200" placeholder="Bijv. naam van het congres"></textarea></label>' +
+      '<p class="impact" id="rq-late" hidden></p>' +
       '<p class="impact ok" id="rq-impact"></p>' +
-      '<button type="button" class="btn" id="rq-send">' + (canApprove() ? 'Vastleggen' : 'Aanvraag indienen') + '</button>';
+      '<button type="button" class="btn" id="rq-send">Aanvraag indienen</button>';
     openSheet('Vrij vragen', html, function (root) {
       function current() {
         var from = root.querySelector('#rq-from').value, to = root.querySelector('#rq-to').value;
@@ -361,19 +374,40 @@
         return { id: 'r' + Date.now(), person: sel ? sel.value : who, by: state.user, type: kind, from: from, fromPart: root.querySelector('#rq-fromPart').value, to: to, toPart: root.querySelector('#rq-toPart').value, note: root.querySelector('#rq-note').value.trim().slice(0, 200), status: 'pending', created: Date.now() };
       }
       function preview() {
-        var r = current(); if (!r.from || !r.to) return;
+        var r = current(), send = root.querySelector('#rq-send'), late = root.querySelector('#rq-late'), rule = root.querySelector('#rq-rule');
+        var earliest = earliestVacation();
+        rule.textContent = kind === 'Vakantie'
+          ? 'Vakantie vraag je minimaal ' + VAK_WEEKS + ' weken van tevoren aan (vanaf ' + longDate(earliest) + '). Alleen de planner of beheerder keurt goed.'
+          : 'Wordt goedgekeurd door de planner of beheerder.';
+        if (!r.from || !r.to) { send.disabled = true; return; }
+        var blocked = false;
+        late.hidden = true;
+        if (tooLate(r)) {
+          late.hidden = false;
+          if (canApprove()) {
+            late.textContent = 'Let op: dit is binnen ' + VAK_WEEKS + ' weken. Alleen als uitzondering vastleggen.';
+          } else {
+            blocked = true;
+            late.textContent = 'Te laat aangevraagd: vakantie kan op zijn vroegst vanaf ' + longDate(earliest) + '. Voor eerder: overleg met de planner.';
+          }
+        }
+        var st = statusFor(r);
+        send.disabled = blocked;
+        send.style.opacity = blocked ? '.45' : '';
+        send.textContent = st === 'approved' ? 'Vastleggen' : 'Aanvraag indienen';
         var imp = impactOf(r), el = root.querySelector('#rq-impact');
         el.className = 'impact' + (imp.length ? '' : ' ok');
         el.textContent = daysIn(r) + ' werkdag(en). ' + (imp.length ? 'Gevolg: ' + imp.join('; ') : 'Geen tekorten in de bezetting.');
       }
       root.querySelectorAll('[data-kind]').forEach(function (b) {
-        b.addEventListener('click', function () { kind = b.getAttribute('data-kind'); root.querySelectorAll('[data-kind]').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); }); });
+        b.addEventListener('click', function () { kind = b.getAttribute('data-kind'); root.querySelectorAll('[data-kind]').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)); }); preview(); });
       });
-      root.querySelectorAll('input,select').forEach(function (i) { i.addEventListener('change', preview); });
+      root.querySelectorAll('input,select').forEach(function (i) { i.addEventListener('change', preview); i.addEventListener('input', preview); });
       preview();
       root.querySelector('#rq-send').addEventListener('click', function () {
         var r = current(); if (!r.from || !r.to) return;
-        r.status = canApprove() ? 'approved' : 'pending';
+        if (tooLate(r) && !canApprove()) { preview(); return; }
+        r.status = statusFor(r);
         requests.push(r); persist(); closeSheet(); render();
         toast(r.status === 'approved' ? 'Vastgelegd in het rooster' : 'Aanvraag verstuurd naar de planner');
       });
@@ -634,6 +668,7 @@
     var when = short(parseIso(r.from)) + (r.fromPart === 'middag' ? ' (middag)' : '') + (r.to !== r.from || r.toPart === 'ochtend' ? ' – ' + short(parseIso(r.to)) + (r.toPart === 'ochtend' ? ' (ochtend)' : '') : '');
     var html = '<div class="req' + (r.status === 'pending' ? ' pending' : '') + '"><div class="top-line"><b>' + esc(opts.showName ? p.name + ' · ' + r.type : r.type) + '</b><span class="status ' + st[0] + '">' + st[1] + '</span></div>' +
       '<span class="note">' + esc(when + ' · ' + daysIn(r) + ' werkdag(en)' + (r.note ? ' · ' + r.note : '')) + '</span>';
+    if (tooLate(r)) html += '<span class="impact">Aangevraagd binnen ' + VAK_WEEKS + ' weken (' + Math.max(0, Math.floor(leadDays(r) / 7)) + ' weken van tevoren)</span>';
     if (opts.review) {
       var imp = impactOf(r);
       html += '<span class="impact' + (imp.length ? '' : ' ok') + '">' + esc(imp.length ? 'Gevolg: ' + imp.join('; ') : 'Geen tekorten door deze aanvraag') + '</span>' +
@@ -662,6 +697,7 @@
     }
     if (!isAdmin()) {
       html += '<div class="btn-row"><button type="button" class="btn" id="new-req">Vrij vragen</button><button type="button" class="btn danger" id="sick-today">Ziek vandaag</button></div>';
+      html += '<p class="note">Vakantie vraag je minimaal ' + VAK_WEEKS + ' weken van tevoren aan; eerst mogelijke dag nu: ' + longDate(earliestVacation()) + '. Aanvragen worden goedgekeurd door de planner of beheerder.</p>';
       var mine = requests.filter(function (r) { return r.person === state.user; }).sort(function (a, b) { return a.from < b.from ? 1 : -1; });
       html += '<section class="card"><h2>Mijn aanvragen</h2>' + (mine.length ? mine.map(function (r) { return reqHtml(r, { mine: true }); }).join('') : '<p class="empty">Nog geen aanvragen.</p>') + '</section>';
     }

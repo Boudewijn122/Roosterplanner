@@ -235,3 +235,4 @@ label.f textarea { padding: .6rem .65rem; resize: vertical; min-height: 4.5rem; 
   .mday { min-height: 6.2rem; }
   .mbar { font-size: .7rem; }
 }
+.btn:disabled { cursor: not-allowed; }
