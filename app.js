@@ -8,7 +8,7 @@
   var PEOPLE = D.people;
   var ADMIN = { id: 'ADMIN', name: 'Beheerder', group: 'Beheer', role: 'admin', note: '' };
   var CONFIG = window.RP_CONFIG || {};
-  var APP_VERSION = '11 · 25 nov 2026';
+  var APP_VERSION = '13 · 25 nov 2026';
   PEOPLE.concat([ADMIN]).forEach(function (p) { p.baseName = p.name; });
   function usernameOf(id) { if (id === 'ADMIN') return 'beheerder'; var p = person(id); return p.baseName.toLowerCase().replace(/\s+/g, '-'); }
   function defaultPw(id) { return id === 'ADMIN' ? '1234' : 'welkom'; }
@@ -1611,10 +1611,17 @@
     return (CONFIG.feedbackEmail || '').trim();
   }
   function sbReady() { return !!(CONFIG.supabaseUrl && CONFIG.supabaseAnonKey); }
+  // Werkt met de nieuwe publishable key (sb_publishable_…) én de oude anon key (JWT).
+  function sbHeaders(extra) {
+    var k = CONFIG.supabaseAnonKey, h = { apikey: k };
+    if (/^eyJ/.test(k)) h.Authorization = 'Bearer ' + k;
+    Object.keys(extra || {}).forEach(function (x) { h[x] = extra[x]; });
+    return h;
+  }
   function sendFeedbackDb(row) {
     return fetch(CONFIG.supabaseUrl.replace(/\/$/, '') + '/rest/v1/feedback', {
       method: 'POST',
-      headers: { apikey: CONFIG.supabaseAnonKey, Authorization: 'Bearer ' + CONFIG.supabaseAnonKey, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      headers: sbHeaders({ 'Content-Type': 'application/json', Prefer: 'return=minimal' }),
       body: JSON.stringify(row)
     }).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); });
   }
