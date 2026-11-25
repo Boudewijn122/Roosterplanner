@@ -341,3 +341,8 @@ body.logged-out .layout { display: block; padding: 0; }
 }
 [data-theme="light"][data-tone="zacht"] .seg { background: #E0DDD7; }
 .saldo-label { font-size: .78rem; font-weight: 700; color: var(--muted); margin-top: .2rem; }
+
+/* ---------- v8: afspraken ---------- */
+.cnt { min-width: 16px; height: 14px; border-radius: 7px; padding: 0 4px; background: var(--surface2); color: var(--ink); font-size: .6rem; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1px var(--line); }
+.event.appt .t { font-weight: 700; }
+.event.appt .meta { opacity: 1; color: var(--muted); }

@@ -1,7 +1,6 @@
 // Instellingen die voor iedereen gelden.
-// feedbackEmail: het adres waar verbeterpunten naartoe gaan (alleen de beheerder).
-// Let op: deze site is openbaar, dus dit adres is zichtbaar in de broncode.
-// Gebruik bij voorkeur een apart adres (bijv. een nieuw Gmail-adres alleen voor de app).
+// Verbeterpunten gaan per e-mail naar de beheerder. Het adres staat licht gecodeerd
+// (base64) zodat simpele spambots het niet direct oppikken.
 window.RP_CONFIG = {
-  feedbackEmail: ''
+  feedbackEmailB64: 'Ymp2aW5rQGhvdG1haWwuY29t'
 };

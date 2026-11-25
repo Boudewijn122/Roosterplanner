@@ -1,6 +1,6 @@
 // Bewaart de app op het toestel zodat hij ook zonder internet opent.
 // Verhoog VERSION na elke wijziging, dan halen telefoons de nieuwe versie op.
-var VERSION = 'rooster-v7';
+var VERSION = 'rooster-v8';
 var FILES = ['./', 'index.html', 'style.css', 'app.js', 'config.js', 'data.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 

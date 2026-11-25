@@ -7,7 +7,8 @@ Op de iPhone: open de link in Safari → Deel → **Zet op beginscherm**.
 
 ## Wat kan het
 - Agenda per **dag, week en maand**, met codes uit MedSpace (OK3, LSU1, FKSU …)
-- **Ingrepen** per OK/POK-blok (voorbeeld, zonder patiëntgegevens)
+- **Afspraken** per dagdeel (ochtend, middag, avond) met tijd, soort (PT1, vergadering, wetenschap …) en omschrijving
+- **Visite** (08:00–08:30) automatisch vóór een ochtendspreekuur in het MCL
 - **Lang drukken** (telefoon) of **rechtermuisknop** (computer) op een dag of blok: ziek melden, vrij vragen, notitie, details
 - **Notities** per blok: privé, of zichtbaar voor iedereen voor wie dat recht heeft
 - **Team**: wie staat waar; **Bezetting**: tekorten t.o.v. de normen uit de Excel
