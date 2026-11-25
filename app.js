@@ -8,7 +8,7 @@
   var PEOPLE = D.people;
   var ADMIN = { id: 'ADMIN', name: 'Beheerder', group: 'Beheer', role: 'admin', note: '' };
   var CONFIG = window.RP_CONFIG || {};
-  var APP_VERSION = '15 · 25 nov 2026';
+  var APP_VERSION = '16 · 25 nov 2026';
   PEOPLE.concat([ADMIN]).forEach(function (p) { p.baseName = p.name; });
   function usernameOf(id) { if (id === 'ADMIN') return 'beheerder'; var p = person(id); return p.baseName.toLowerCase().replace(/\s+/g, '-'); }
   function defaultPw(id) { return id === 'ADMIN' ? '1234' : 'welkom'; }
@@ -574,23 +574,24 @@
             canApprove() ? 'Toch vastleggen' : 'Toch indienen', 'Datum aanpassen', function () { submitReq(current()); });
         } else submitReq(r0);
       });
-      function submitReq(r) {
-        r.status = statusFor(r);
-        if (r.status === 'approved') {
-          var g = gapsFor(r);
-          requests.push(r); addGaps(g);
-          if (r.person !== state.user) notify(r.person, r.type + ' vastgelegd door ' + person(state.user).name + ': ' + short(parseIso(r.from)) + (r.to !== r.from ? ' – ' + short(parseIso(r.to)) : ''));
-          persist(); closeSheet(); render();
-          if (g.length) openGaps(function (x) { return x.reqId === r.id; }, 'Vastgelegd · ' + g.length + ' tekort' + (g.length > 1 ? 'en' : ''));
-          else toast('Vastgelegd, geen tekorten');
-        } else {
-          requests.push(r);
-          notify('PLANNERS', 'Nieuwe aanvraag: ' + person(r.person).name + ' · ' + r.type + ' ' + short(parseIso(r.from)) + (r.to !== r.from ? ' – ' + short(parseIso(r.to)) : ''));
-          persist(); closeSheet(); render();
-          toast('Aanvraag verstuurd naar de planner');
-        }
-      }
     });
+  }
+
+  function submitReq(r) {
+    r.status = statusFor(r);
+    if (r.status === 'approved') {
+      var g = gapsFor(r);
+      requests.push(r); addGaps(g);
+      if (r.person !== state.user) notify(r.person, r.type + ' vastgelegd door ' + person(state.user).name + ': ' + short(parseIso(r.from)) + (r.to !== r.from ? ' – ' + short(parseIso(r.to)) : ''));
+      persist(); closeSheet(); render();
+      if (g.length) openGaps(function (x) { return x.reqId === r.id; }, 'Vastgelegd · ' + g.length + ' tekort' + (g.length > 1 ? 'en' : ''));
+      else toast('Vastgelegd, geen tekorten');
+    } else {
+      requests.push(r);
+      notify('PLANNERS', 'Nieuwe aanvraag: ' + person(r.person).name + ' · ' + r.type + ' ' + short(parseIso(r.from)) + (r.to !== r.from ? ' – ' + short(parseIso(r.to)) : ''));
+      persist(); closeSheet(); render();
+      toast('Aanvraag verstuurd naar de planner');
+    }
   }
 
   function notesHtml(key) {
@@ -1370,6 +1371,33 @@
       root.querySelector('#pc-abs').addEventListener('click', function () { openRequest(pid, dIso, 'dag'); });
     });
   }
+  function planBlocks(pids, dateIso, halves, text, noteText, doNotify) {
+    var v = { pids: pids, date: dateIso, halves: halves, text: text }, d = parseIso(dateIso);
+    var planId = 'plan' + Date.now(), procLines = [];
+    var newGaps = [];
+    v.halves.forEach(function (h) {
+      var before = countsFor(d, h, null), prevLoc = {};
+      v.pids.forEach(function (pid) { prevLoc[pid] = locOf(slot(person(pid), d, h).text); });
+      v.pids.forEach(function (pid) {
+        var k = keyOf(pid, v.date, h), old = slot(person(pid), d, h).text;
+        overrides.blocks[k] = v.text;
+        if (procLines.length) overrides.procs[k] = procLines.map(function (l) { var m = l.match(/^(\d{1,2}[:.]\d{2})\s+(.*)$/); return m ? { time: m[1].replace('.', ':'), name: m[2] } : { time: '', name: l }; });
+        else delete overrides.procs[k];
+        if (noteText) notes.push({ id: 'n' + Date.now() + pid, key: k, author: state.user, text: noteText, shared: true, ts: Date.now() });
+        if (doNotify && pid !== state.user) notify(pid, 'Nieuw ingepland door ' + person(state.user).name + ': ' + v.text + ' · ' + short(d) + ' ' + HALVES[h].toLowerCase() + (old && old !== v.text ? ' (was: ' + old + ')' : ''));
+      });
+      var after = countsFor(d, h, null);
+      CHECKS.forEach(function (k2) {
+        var n = needFor(d, h, k2);
+        if (k2 === 'Totaal' || !((before[k2] || 0) >= n && (after[k2] || 0) < n)) return;
+        var moved = v.pids.filter(function (pid) { return prevLoc[pid] === k2; })[0] || v.pids[0];
+        newGaps.push({ id: 'g' + Date.now() + Math.random().toString(36).slice(2, 6), reqId: planId, absent: moved, reason: 'herplanning', date: v.date, half: h, loc: k2, need: n, have: after[k2] || 0, status: 'open' });
+      });
+    });
+    addGaps(newGaps);
+    if (doNotify) notify('PLANNERS', person(state.user).name + ' plande ' + v.text + ' in voor ' + v.pids.map(function (x) { return person(x).name; }).join(', ') + ' · ' + short(d));
+    return { gaps: newGaps, planId: planId };
+  }
   function openPlan(pids, dIso, half, presetText) {
     var known = PLAN_ACTS.some(function (a) { return a[0] === presetText; });
     var html = '<div class="card"><h3>Wie</h3><div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.1rem .6rem">' + PEOPLE.map(function (p) {
@@ -1406,29 +1434,8 @@
       root.querySelector('#pl-save').addEventListener('click', function () {
         var v = vals(); if (!v.date || !v.pids.length || !v.text) { preview(); return; }
         var d = parseIso(v.date); if (weekday(d) > 4) { preview(); return; }
-        var planId = 'plan' + Date.now(), procLines = [];
-        var noteText = root.querySelector('#pl-note').value.trim(), doNotify = root.querySelector('#pl-notify').checked, newGaps = [];
-        v.halves.forEach(function (h) {
-          var before = countsFor(d, h, null), prevLoc = {};
-          v.pids.forEach(function (pid) { prevLoc[pid] = locOf(slot(person(pid), d, h).text); });
-          v.pids.forEach(function (pid) {
-            var k = keyOf(pid, v.date, h), old = slot(person(pid), d, h).text;
-            overrides.blocks[k] = v.text;
-            if (procLines.length) overrides.procs[k] = procLines.map(function (l) { var m = l.match(/^(\d{1,2}[:.]\d{2})\s+(.*)$/); return m ? { time: m[1].replace('.', ':'), name: m[2] } : { time: '', name: l }; });
-            else delete overrides.procs[k];
-            if (noteText) notes.push({ id: 'n' + Date.now() + pid, key: k, author: state.user, text: noteText, shared: true, ts: Date.now() });
-            if (doNotify && pid !== state.user) notify(pid, 'Nieuw ingepland door ' + person(state.user).name + ': ' + v.text + ' · ' + short(d) + ' ' + HALVES[h].toLowerCase() + (old && old !== v.text ? ' (was: ' + old + ')' : ''));
-          });
-          var after = countsFor(d, h, null);
-          CHECKS.forEach(function (k2) {
-            var n = needFor(d, h, k2);
-            if (k2 === 'Totaal' || !((before[k2] || 0) >= n && (after[k2] || 0) < n)) return;
-            var moved = v.pids.filter(function (pid) { return prevLoc[pid] === k2; })[0] || v.pids[0];
-            newGaps.push({ id: 'g' + Date.now() + Math.random().toString(36).slice(2, 6), reqId: planId, absent: moved, reason: 'herplanning', date: v.date, half: h, loc: k2, need: n, have: after[k2] || 0, status: 'open' });
-          });
-        });
-        addGaps(newGaps);
-        if (doNotify) notify('PLANNERS', person(state.user).name + ' plande ' + v.text + ' in voor ' + v.pids.map(function (x) { return person(x).name; }).join(', ') + ' · ' + short(d));
+        var noteText = root.querySelector('#pl-note').value.trim(), doNotify = root.querySelector('#pl-notify').checked;
+        var res = planBlocks(v.pids, v.date, v.halves, v.text, noteText, doNotify), newGaps = res.gaps, planId = res.planId;
         persist(); render();
         if (newGaps.length) openGaps(function (g) { return g.reqId === planId; }, 'Ingepland · ' + newGaps.length + ' nieuw tekort');
         else { closeSheet(); toast('Ingepland' + (doNotify ? ' en betrokkenen op de hoogte gebracht' : '')); }
@@ -1597,6 +1604,7 @@
     setTimeout(function () { var el = document.getElementById(last ? 'lg-pw' : 'lg-user'); if (el) el.focus(); }, 50);
   }
   function login(id) {
+    ai.msgs = []; ai.status = {};
     state.user = id; state.viewPid = null; save('rp.user', id);
     state.tab = id === 'ADMIN' ? 'beheer' : 'agenda'; state.cursor = startOfDay(new Date());
     save('rp.tab', state.tab); closeSheet(); document.body.classList.remove('logged-out'); render();
@@ -1661,6 +1669,188 @@
         window.location.href = 'mailto:' + encodeURIComponent(to).replace('%40', '@') + '?subject=' + encodeURIComponent('[Roosterplanner] ' + kind + ': ' + subj) + '&body=' + encodeURIComponent(body);
       }
       render(); toast(to ? 'E-mail klaargezet' : 'Bewaard voor de beheerder');
+    });
+  }
+
+  /* =========================================================
+     Assistent (Claude via Supabase-functie). Stelt acties voor; de gebruiker tikt "Toepassen".
+     ========================================================= */
+  var ai = { msgs: [], status: {}, busy: false };
+  var DAGNAMEN = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'];
+  function slotTxt(s) { return s.absent ? s.absent.type + (s.absent.status === 'pending' ? ' (aangevraagd)' : '') : (s.text || '-'); }
+  function aiContext() {
+    var today = startOfDay(new Date()), rol = roleOf(state.user), y = today.getFullYear();
+    var ctx = {
+      vandaag: iso(today), weekdag: DAGNAMEN[weekday(today)], rol: rol,
+      gebruiker: { id: state.user, naam: person(state.user).name, rol: roleLabel(state.user) },
+      vroegsteVakantieZonderWaarschuwing: iso(earliestVacation()),
+      personen: PEOPLE.map(function (p) { var r = rights[p.id] || {}; return { id: p.id, naam: p.name, groep: p.group, rol: roleLabel(p.id), fte: r.fte, doetDienst: !!r.doetDienst }; })
+    };
+    if (!isAdmin()) {
+      var me = person(state.user), rooster = [];
+      for (var i = 0; i < 28; i++) { var d = addDays(today, i); if (weekday(d) > 4) continue; rooster.push({ datum: iso(d), ochtend: slotTxt(slot(me, d, 0)), middag: slotTxt(slot(me, d, 1)) }); }
+      ctx.mijnRooster = rooster;
+      ctx.mijnAanvragen = requests.filter(function (r) { return r.person === state.user && r.to >= iso(today); }).map(function (r) { return { soort: r.type, van: r.from, tot: r.to, status: r.status }; });
+      ctx.mijnDiensten = Object.keys(duties).filter(function (di) { return duties[di] === state.user && di >= iso(today); }).sort();
+      ctx.mijnGeenDienst = Object.keys(noDuty[state.user] || {}).filter(function (di) { return di >= iso(today); }).sort();
+      var sd = saldoOf(state.user); ctx.saldoDagen = { vakantie: sd.vak, congres: sd.con };
+    }
+    if (canPlanDuty() || canApprove()) {
+      var dl = [];
+      for (var m = 0; m < 2; m++) {
+        for (var d2 = new Date(y, today.getMonth() + m, 1), mm = d2.getMonth(); d2.getMonth() === mm; d2 = addDays(d2, 1)) {
+          var di = iso(d2), weg = {};
+          dutyPeople().forEach(function (p) { var b = dutyBlock(p.id, di); if (b) weg[p.id] = b; });
+          dl.push({ datum: di, dag: DAGNAMEN[weekday(d2)], soort: dutyType(d2)[1], ingepland: duties[di] || null, nietBeschikbaar: weg });
+        }
+      }
+      ctx.diensten = dl;
+      var st = dutyStats(y), ver = {};
+      Object.keys(st).forEach(function (pid) { var s = st[pid]; ver[pid] = { fte: s.fte, procent: Math.round(s.pct * 10) / 10, doelJaar: Math.round(s.doel), ingepland: s.gepland, gedaan: s.gedaan }; });
+      ctx.dienstVerdeling = ver;
+    }
+    if (canApprove()) {
+      var team = {};
+      PEOPLE.forEach(function (p) { var row = []; for (var i2 = 0, n = 0; n < 10 && i2 < 20; i2++) { var d3 = addDays(today, i2); if (weekday(d3) > 4) continue; n++; row.push(iso(d3) + ' ' + slotTxt(slot(p, d3, 0)) + ' / ' + slotTxt(slot(p, d3, 1))); } team[p.id] = row; });
+      ctx.teamRooster10Werkdagen = team;
+      ctx.openAanvragen = requests.filter(function (r) { return r.status === 'pending'; }).map(function (r) { return { persoon: r.person, soort: r.type, van: r.from, tot: r.to }; });
+    }
+    return ctx;
+  }
+  function isDate(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(parseIso(s)); }
+  function aiPid(x) { if (!x) return isAdmin() ? null : state.user; return person(x) && x !== 'ADMIN' ? x : null; }
+  function halfOf(dd) { return dd === 'ochtend' ? 0 : dd === 'middag' ? 1 : null; }
+  function setNoDuty(pid, di, on) {
+    noDuty[pid] = noDuty[pid] || {};
+    if (on) { noDuty[pid][di] = true; if (duties[di] === pid) notify('DIENST', person(pid).name + ' kan geen dienst op ' + short(parseIso(di)) + ', maar staat ingepland'); }
+    else delete noDuty[pid][di];
+  }
+  // Elke actie: describe (tekst op de kaart) en run (geeft foutmelding terug of '' bij succes). Rechten worden hier opnieuw gecontroleerd.
+  var AI_ACTIONS = {
+    ziek_melden: {
+      describe: function (i) { var pid = aiPid(i.persoon); return 'Ziek melden: ' + (pid ? person(pid).name : '?') + ' · ' + (isDate(i.datum) ? longDate(parseIso(i.datum)) : '?') + ' · ' + (i.dagdeel === 'dag' ? 'hele dag' : i.dagdeel); },
+      run: function (i) {
+        var pid = aiPid(i.persoon); if (!pid) return 'onbekende persoon';
+        if (pid !== state.user && !canApprove()) return 'alleen een planner kan iemand anders ziek melden';
+        if (!isDate(i.datum) || i.datum < iso(startOfDay(new Date()))) return 'datum klopt niet of ligt in het verleden';
+        reportSick(pid, i.datum, halfOf(i.dagdeel)); return '';
+      }
+    },
+    vrij_aanvragen: {
+      describe: function (i) {
+        var pid = aiPid(i.persoon), r = { type: i.soort, from: i.van, created: Date.now() };
+        return i.soort + ' ' + (canApprove() && pid !== state.user ? 'vastleggen' : 'aanvragen') + ': ' + (pid ? person(pid).name : '?') + ' · ' + (isDate(i.van) ? short(parseIso(i.van)) : '?') + (i.tot && i.tot !== i.van && isDate(i.tot) ? ' t/m ' + short(parseIso(i.tot)) : '') +
+          (i.van_dagdeel === 'middag' ? ' (vanaf middag)' : '') + (i.tot_dagdeel === 'ochtend' ? ' (tot en met ochtend)' : '') + (isDate(i.van) && tooLate(r) ? ' · let op: binnen 12 weken, planner kan afwijzen' : '') + (i.notitie ? ' · “' + i.notitie + '”' : '');
+      },
+      run: function (i) {
+        var pid = aiPid(i.persoon); if (!pid) return 'onbekende persoon';
+        if (pid !== state.user && !canApprove()) return 'je kunt alleen voor jezelf vrij vragen';
+        if (TYPES.indexOf(i.soort) < 0) return 'onbekende soort';
+        if (!isDate(i.van) || !isDate(i.tot || i.van)) return 'datum klopt niet';
+        var from = i.van, to = i.tot || i.van; if (to < from) { var t0 = from; from = to; to = t0; }
+        submitReq({ id: 'r' + Date.now(), person: pid, by: state.user, type: i.soort, from: from, fromPart: i.van_dagdeel === 'middag' ? 'middag' : 'dag', to: to, toPart: i.tot_dagdeel === 'ochtend' ? 'ochtend' : 'dag', note: String(i.notitie || '').slice(0, 200), status: 'pending', created: Date.now() });
+        if (!sheet.open) setTimeout(openAssistant, 50);
+        return '';
+      }
+    },
+    geen_dienst: {
+      describe: function (i) { var ds = (i.datums || []).filter(isDate).sort(); return (i.kan_niet === false ? 'Toch beschikbaar voor dienst: ' : 'Geen dienst: ') + ds.map(function (x) { return short(parseIso(x)); }).join(', '); },
+      run: function (i) {
+        if (isAdmin() || !dutyPeople().some(function (p) { return p.id === state.user; })) return 'je staat niet op de dienstlijst';
+        var ds = (i.datums || []).filter(isDate); if (!ds.length) return 'geen geldige datums';
+        ds.forEach(function (di) { setNoDuty(state.user, di, i.kan_niet !== false); }); persist(); render(); toast('Opgeslagen voor de dienstplanner'); return '';
+      }
+    },
+    dienst_inplannen: {
+      describe: function (i) { var pid = i.persoon ? aiPid(i.persoon) : null; return (pid ? 'Dienst: ' + person(pid).name : 'Dienst leegmaken') + ' · ' + (isDate(i.datum) ? longDate(parseIso(i.datum)) + (weekday(parseIso(i.datum)) > 4 ? ' (heel weekend)' : '') : '?') + (pid && isDate(i.datum) && dutyBlock(pid, i.datum) ? ' · let op: ' + dutyBlock(pid, i.datum) : ''); },
+      run: function (i) {
+        if (!canPlanDuty()) return 'alleen de dienstplanner of beheerder plant diensten';
+        if (!isDate(i.datum)) return 'datum klopt niet';
+        var pid = i.persoon ? aiPid(i.persoon) : null; if (i.persoon && !pid) return 'onbekende persoon';
+        assignDuty(i.datum, pid); persist(); render(); toast(pid ? person(pid).name + ' ingepland' : 'Dienst leeggemaakt'); return '';
+      }
+    },
+    diensten_verdelen: {
+      describe: function (i) { var m = /^(\d{4})-(\d{2})$/.exec(i.maand || ''); return 'Lege diensten automatisch verdelen naar FTE · ' + (m ? MONTHS_LONG[+m[2] - 1] + ' ' + m[1] : '?'); },
+      run: function (i) {
+        if (!canPlanDuty()) return 'alleen de dienstplanner of beheerder plant diensten';
+        var m = /^(\d{4})-(\d{2})$/.exec(i.maand || ''); if (!m) return 'maand klopt niet';
+        var n = autoDistribute(new Date(+m[1], +m[2] - 1, 1)); persist(); render(); toast(n ? n + ' dienstdagen verdeeld' : 'Niets te verdelen'); return '';
+      }
+    },
+    inplannen: {
+      describe: function (i) { return 'Inplannen: ' + (i.activiteit || '?') + ' · ' + (i.personen || []).map(function (x) { var p = aiPid(x); return p ? person(p).name : '?'; }).join(', ') + ' · ' + (isDate(i.datum) ? short(parseIso(i.datum)) : '?') + ' ' + (i.dagdeel === 'dag' ? 'hele dag' : i.dagdeel) + (i.notitie ? ' · “' + i.notitie + '”' : ''); },
+      run: function (i) {
+        if (!canApprove()) return 'alleen een planner of beheerder kan inplannen';
+        var pids = (i.personen || []).map(aiPid).filter(Boolean); if (!pids.length) return 'geen geldige personen';
+        if (!isDate(i.datum) || weekday(parseIso(i.datum)) > 4) return 'kies een werkdag';
+        if (!i.activiteit) return 'geen activiteit';
+        var h = halfOf(i.dagdeel), res = planBlocks(pids, i.datum, h == null ? [0, 1] : [h], String(i.activiteit).slice(0, 60), String(i.notitie || '').slice(0, 200), true);
+        persist(); render(); if (res.gaps.length) openGaps(function (g) { return g.reqId === res.planId; }, 'Ingepland · ' + res.gaps.length + ' nieuw tekort'); else toast('Ingepland'); return '';
+      }
+    }
+  };
+  function aiSuggestions() {
+    if (canPlanDuty()) return ['Verdeel de diensten van ' + MONTHS_LONG[(new Date().getMonth() + 1) % 12], 'Wie kan er komend weekend dienst doen?', 'Hoe staat de dienstverdeling naar FTE?'];
+    if (canApprove()) return ['Welke aanvragen staan nog open?', 'Wie is er volgende week afwezig?', 'Hoe plan ik iemand in?'];
+    return ['Ik ben vandaag ziek', 'Ik kan volgende week vrijdag geen dienst', 'Vakantie aanvragen', 'Hoe werkt dit programma?'];
+  }
+  function aiRenderLog() {
+    var log = document.getElementById('ai-log'); if (!log) return;
+    var html = '';
+    if (!ai.msgs.length) html = '<p class="note" style="margin:0">Vraag iets over het rooster of de app, of laat me iets klaarzetten. Ik doe niets zonder dat jij op <b>Toepassen</b> tikt. Zet hier geen patiëntgegevens in.</p><div class="ai-sugs">' + aiSuggestions().map(function (s) { return '<button type="button" class="chip" data-aisug="' + esc(s) + '">' + esc(s) + '</button>'; }).join('') + '</div>';
+    ai.msgs.forEach(function (m) {
+      if (m.role === 'user') {
+        var txt = typeof m.content === 'string' ? m.content : (m.content.filter(function (b) { return b.type === 'text'; })[0] || {}).text;
+        if (txt) html += '<div class="ai-msg me">' + esc(txt) + '</div>';
+        return;
+      }
+      (m.content || []).forEach(function (b) {
+        if (b.type === 'text' && b.text.trim()) html += '<div class="ai-msg">' + esc(b.text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>') + '</div>';
+        if (b.type === 'tool_use') {
+          var act = AI_ACTIONS[b.name], st = ai.status[b.id] || 'open';
+          html += '<div class="ai-act"><span>' + esc(act ? act.describe(b.input || {}) : b.name) + '</span>' +
+            (st === 'open' ? '<span class="btn-row"><button type="button" class="btn" data-aiok="' + b.id + '">Toepassen</button><button type="button" class="btn secondary" data-aino="' + b.id + '">Niet doen</button></span>'
+              : '<small>' + (st === 'done' ? '✓ Toegepast' : st === 'skipped' ? 'Niet gedaan' : 'Lukte niet: ' + esc(st)) + '</small>') + '</div>';
+        }
+      });
+    });
+    if (ai.busy) html += '<div class="ai-msg typing">Even denken…</div>';
+    log.innerHTML = html;
+    log.querySelectorAll('[data-aisug]').forEach(function (b) { b.addEventListener('click', function () { aiSend(b.getAttribute('data-aisug')); }); });
+    log.querySelectorAll('[data-aiok],[data-aino]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var id = b.getAttribute('data-aiok') || b.getAttribute('data-aino'), blk = aiFindTool(id); if (!blk) return;
+        if (b.hasAttribute('data-aino')) ai.status[id] = 'skipped';
+        else { var err = ''; try { err = AI_ACTIONS[blk.name] ? AI_ACTIONS[blk.name].run(blk.input || {}) : 'onbekende actie'; } catch (e) { err = 'fout in de app'; } ai.status[id] = err || 'done'; }
+        aiRenderLog();
+      });
+    });
+    log.scrollTop = log.scrollHeight;
+  }
+  function aiFindTool(id) { for (var i = 0; i < ai.msgs.length; i++) { var c = ai.msgs[i].content; if (Array.isArray(c)) for (var j = 0; j < c.length; j++) if (c[j].type === 'tool_use' && c[j].id === id) return c[j]; } return null; }
+  function aiSend(text) {
+    text = String(text || '').trim(); if (!text || ai.busy) return;
+    var last = ai.msgs[ai.msgs.length - 1], results = [];
+    if (last && last.role === 'assistant') (last.content || []).forEach(function (b) {
+      if (b.type !== 'tool_use') return;
+      var st = ai.status[b.id] || 'open';
+      results.push({ type: 'tool_result', tool_use_id: b.id, content: st === 'done' ? 'Toegepast door de gebruiker.' : st === 'skipped' ? 'De gebruiker koos: niet doen.' : st === 'open' ? 'Nog niet toegepast; de gebruiker stuurde eerst een nieuw bericht.' : 'Mislukt: ' + st });
+    });
+    ai.msgs.push({ role: 'user', content: results.length ? results.concat([{ type: 'text', text: text }]) : text });
+    ai.busy = true; aiRenderLog();
+    fetch(CONFIG.supabaseUrl.replace(/\/$/, '') + '/functions/v1/assistent', { method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ messages: ai.msgs, context: aiContext() }) })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }); })
+      .then(function (j) { ai.msgs.push({ role: 'assistant', content: j.content || [] }); })
+      .catch(function (e) { ai.msgs.pop(); toast(e.message && e.message.length < 120 ? e.message : 'De assistent is nu niet bereikbaar'); var inp = document.getElementById('ai-in'); if (inp && !inp.value) inp.value = text; })
+      .then(function () { ai.busy = false; aiRenderLog(); });
+  }
+  function openAssistant() {
+    openSheet('Assistent', '<div id="ai-log" class="ai-log"></div><form id="ai-form" class="ai-form"><input id="ai-in" maxlength="500" autocomplete="off" placeholder="Bijv. ik kan 12 en 13 december geen dienst"><button type="submit" class="btn" aria-label="Versturen">↑</button></form>' +
+      '<button type="button" class="text-btn" id="ai-new" style="align-self:flex-start">Nieuw gesprek</button>', function (root) {
+      root.querySelector('#ai-form').addEventListener('submit', function (e) { e.preventDefault(); var inp = root.querySelector('#ai-in'); var v = inp.value; inp.value = ''; aiSend(v); });
+      root.querySelector('#ai-new').addEventListener('click', function () { ai.msgs = []; ai.status = {}; aiRenderLog(); });
+      aiRenderLog();
     });
   }
 
@@ -1765,6 +1955,7 @@
     document.querySelectorAll('.tab').forEach(function (b) { b.addEventListener('click', function () { state.tab = b.getAttribute('data-tab'); save('rp.tab', state.tab); window.scrollTo(0, 0); render(); }); });
 
     var unread = myNotifs().filter(function (n) { return !n.read; }).length;
+    document.getElementById('ai-btn').hidden = !sbReady();
     var wb = document.getElementById('who-btn');
     wb.innerHTML = esc(isAdmin() ? '★' : me.id) + (unread ? '<span class="badge" style="top:-4px;left:auto;right:-6px">' + unread + '</span>' : '');
     wb.style.position = 'relative';
@@ -1806,6 +1997,7 @@
   document.getElementById('today-btn').addEventListener('click', function () { state.cursor = startOfDay(new Date()); render(); });
   document.getElementById('who-btn').addEventListener('click', function () { if (state.user) openProfile(); else openWho(); });
   document.getElementById('settings-btn').addEventListener('click', function () { openSettings(); });
+  document.getElementById('ai-btn').addEventListener('click', openAssistant);
   document.getElementById('feedback-btn').addEventListener('click', function () { state.tab = 'feedback'; window.scrollTo(0, 0); render(); });
   document.getElementById('theme-btn').addEventListener('click', function () {
     var dark = document.documentElement.getAttribute('data-theme') === 'dark';
