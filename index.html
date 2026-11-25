@@ -44,7 +44,10 @@
         <button type="button" class="round-btn" id="settings-btn" aria-label="Instellingen">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
         </button>
-        <button type="button" class="round-btn" id="add-btn" aria-label="Nieuwe aanvraag">
+        <button type="button" class="round-btn" id="feedback-btn" aria-label="Verbeteringen en opmerkingen">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/></svg>
+        </button>
+        <button type="button" class="round-btn" id="add-btn" aria-label="Nieuw">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         </button>
         <button type="button" class="avatar" id="who-btn" aria-label="Mijn profiel">?</button>
@@ -74,7 +77,10 @@
     <button type="button" id="install-close" class="text-btn">Oké</button>
   </div>
 
-  <main id="main"></main>
+  <div class="layout">
+    <main id="main"></main>
+    <aside id="widgets" class="widgets" aria-label="Widgets"></aside>
+  </div>
 
   <nav class="tabs" id="tabs" aria-label="Menu"></nav>
 </div>
@@ -83,9 +89,18 @@
   <div class="sheet-inner" id="sheet-inner"></div>
 </dialog>
 
+<dialog id="alert" class="alert" aria-labelledby="alert-title">
+  <div class="alert-inner">
+    <h2 id="alert-title"></h2>
+    <p id="alert-text"></p>
+    <div class="alert-btns"><button type="button" class="btn secondary" id="alert-cancel"></button><button type="button" class="btn" id="alert-ok"></button></div>
+  </div>
+</dialog>
+
 <div id="menu" class="menu" role="menu" hidden></div>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
+<script src="config.js"></script>
 <script src="data.js"></script>
 <script src="app.js"></script>
 </body>
