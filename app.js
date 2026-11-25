@@ -768,6 +768,7 @@
      ========================================================= */
   function dutyType(d) { return weekday(d) > 4 ? ['WD', 'Weekenddienst'] : ['D', 'Dagdienst']; }
   function dutyPeople() { return PEOPLE.filter(function (p) { return rights[p.id] && rights[p.id].doetDienst; }); }
+  function dutyShort(pid) { return person(pid).name.replace(/^Chirurg /, '').split(' ')[0]; }
   function isNoDuty(pid, di) { return !!(noDuty[pid] && noDuty[pid][di]); }
   function absentOn(pid, di) { var r = absenceFor(pid, di, 0) || absenceFor(pid, di, 1); if (r) return r; var d = parseIso(di); if (weekday(d) > 4) return requests.filter(function (x) { return x.person === pid && x.status !== 'declined' && di >= x.from && di <= x.to; })[0] || null; return null; }
   function dutyBlock(pid, di) { if (isNoDuty(pid, di)) return 'geen dienst'; var a = absentOn(pid, di); if (a) return a.type.toLowerCase() + (a.status === 'pending' ? ' (aangevraagd)' : ''); return ''; }
@@ -827,15 +828,17 @@
     var me = person(state.user), st = dutyStats(y);
     var html = '';
     if (planner) html += '<div class="seg" style="grid-template-columns:repeat(2,1fr)" role="tablist" aria-label="Weergave"><button type="button" data-dmode="plan" aria-selected="' + (mode === 'plan') + '">Planning</button><button type="button" data-dmode="mijn" aria-selected="' + (mode === 'mijn') + '">Mijn beschikbaarheid</button></div>';
-    if (mode === 'plan') html += '<div class="btn-row"><button type="button" class="btn" id="d-auto">Automatisch verdelen</button><button type="button" class="btn secondary" id="d-clear">Maand leegmaken</button></div><p class="note" style="margin:0">Tik op een dag om iemand in te plannen. Vakantie (ook aangevraagd) en "geen dienst" tellen als niet beschikbaar. Verdeling naar FTE.</p>';
+    if (mode === 'plan') html += '<div class="btn-row"><button type="button" class="btn" id="d-auto">Automatisch verdelen</button><button type="button" class="btn secondary" id="d-clear">Maand leegmaken</button></div><p class="note" style="margin:0">Tik op een dag om iemand in te plannen. Vakantie (ook aangevraagd) en "geen dienst" tellen als niet beschikbaar; ✕ in een dag laat zien wie geen dienst kan. Verdeling naar FTE.</p>';
     else html += '<p class="note" style="margin:0">Tik op de dagen waarop je <b>geen dienst</b> kunt. Vakantie hoef je niet aan te geven; die telt automatisch mee.</p>';
     html += '<div class="month"><div class="month-head">' + DAYS.map(function (x) { return '<span>' + x + '</span>'; }).join('') + '</div><div class="month-grid">';
     for (var i = 0; i < 42; i++) {
       var d = addDays(start, i); if (i >= 35 && d.getMonth() !== cur.getMonth()) break;
       var di = iso(d), pid = duties[di], wd = weekday(d), inner = '';
       if (mode === 'plan') {
-        if (pid) { var bl = dutyBlock(pid, di); inner = '<span class="mbar ' + (bl ? 't-AF pend' : 't-DI') + '" title="' + esc(person(pid).name + (bl ? ' · ' + bl : '')) + '">' + esc(person(pid).name.replace(/^Chirurg /, '').split(' ')[0]) + (bl ? ' !' : '') + '</span>'; }
+        if (pid) { var bl = dutyBlock(pid, di); inner = '<span class="mbar ' + (bl ? 't-AF pend' : 't-DI') + '" title="' + esc(person(pid).name + (bl ? ' · ' + bl : '')) + '">' + esc(dutyShort(pid)) + (bl ? ' !' : '') + '</span>'; }
         else inner = '<span class="mbar" style="color:var(--muted)">–</span>';
+        var nds = dutyPeople().filter(function (p) { return p.id !== pid && isNoDuty(p.id, di); });
+        if (nds.length) inner += '<span class="mbar t-AF pend" title="' + esc('Geen dienst: ' + nds.map(function (p) { return p.name; }).join(', ')) + '">✕ ' + esc(nds.map(function (p) { return dutyShort(p.id); }).join(' ')) + '</span>';
       } else {
         var own = state.user, nd = isNoDuty(own, di), ab = absentOn(own, di);
         inner = (duties[di] === own ? '<span class="mbar t-DI">' + dutyType(d)[0] + '</span>' : '') + (nd ? '<span class="mbar t-AF pend">geen</span>' : '') + (ab ? '<span class="mbar t-AF">' + absLetter(ab) + '</span>' : '');
@@ -843,6 +846,11 @@
       html += '<button type="button" class="mday' + (d.getMonth() !== cur.getMonth() ? ' out' : '') + (wd > 4 ? ' weekend' : '') + (di === today ? ' today' : '') + '" data-dday="' + di + '"><span class="mnum">' + d.getDate() + '</span>' + inner + '</button>';
     }
     html += '</div></div>';
+    if (mode === 'plan') {
+      var mPrefix = iso(first).slice(0, 7);
+      var ndRows = dutyPeople().map(function (p) { return { p: p, days: Object.keys(noDuty[p.id] || {}).filter(function (x) { return noDuty[p.id][x] && x.slice(0, 7) === mPrefix; }).sort() }; }).filter(function (r) { return r.days.length; });
+      html += '<section class="card"><h2>Geen dienst opgegeven in ' + esc(MONTHS_LONG[cur.getMonth()]) + '</h2>' + (ndRows.length ? ndRows.map(function (r) { return '<div class="w-row"><span>' + esc(r.p.name) + '</span><b style="text-align:right">' + esc(r.days.map(function (x) { return short(parseIso(x)); }).join(', ')) + '</b></div>'; }).join('') : '<p class="empty">Nog niemand heeft dagen opgegeven.</p>') + '</section>';
+    }
     var mine = Object.keys(duties).filter(function (di) { return duties[di] === state.user && di >= today; }).sort().slice(0, 8);
     if (!isAdmin()) html += '<section class="card"><h2>Mijn komende diensten</h2>' + (mine.length ? mine.map(function (di) { return '<div class="w-row"><span>' + esc(longDate(parseIso(di))) + '</span><b>' + dutyType(parseIso(di))[1] + '</b></div>'; }).join('') : '<p class="empty">Geen diensten ingepland.</p>') + '</section>';
     var rows = canSeeDutyAll() ? dutyPeople() : dutyPeople().filter(function (p) { return p.id === state.user; });
