@@ -8,7 +8,7 @@
   var PEOPLE = D.people;
   var ADMIN = { id: 'ADMIN', name: 'Beheerder', group: 'Beheer', role: 'admin', note: '' };
   var CONFIG = window.RP_CONFIG || {};
-  var APP_VERSION = '17 · 26 nov 2026';
+  var APP_VERSION = '18 · 26 nov 2026';
   PEOPLE.concat([ADMIN]).forEach(function (p) { p.baseName = p.name; });
   function usernameOf(id) { if (id === 'ADMIN') return 'beheerder'; var p = person(id); return p.baseName.toLowerCase().replace(/\s+/g, '-'); }
   function defaultPw(id) { return id === 'ADMIN' ? '1234' : 'welkom'; }
@@ -170,6 +170,8 @@
   var appts = load('rp.appts', []);
   var duties = load('rp.duties', {});
   var noDuty = load('rp.nodienst', {});
+  var dutyPub = load('rp.dutypub', {});   // 'JJJJ-MM' -> true als de maand gepubliceerd is
+  var swaps = load('rp.swaps', []);
   if (!load('rp.dienstSeeded', false)) { if (rights.B && rights.B.role === 'specialist') rights.B.role = 'dienst'; save('rp.dienstSeeded', true); }
   function applyNames() { PEOPLE.concat([ADMIN]).forEach(function (p) { var pr = profiles[p.id]; p.name = pr && pr.naam ? pr.naam : p.baseName; }); }
   applyNames();
@@ -178,7 +180,7 @@
     var nm = addDays(mondayOf(new Date()), 7);
     requests = [{ id: 'seed1', person: 'C', by: 'C', type: 'Congres', from: iso(addDays(nm, 2)), fromPart: 'dag', to: iso(addDays(nm, 3)), toPart: 'dag', note: 'Voorbeeldaanvraag', status: 'pending', created: Date.now() }];
   }
-  function persist() { save('rp.prefs', prefs); save('rp.overrides', overrides); save('rp.notes', notes); save('rp.rights', rights); save('rp.requests', requests); save('rp.gaps', gaps); save('rp.profiles', profiles); save('rp.notifs', notifs); save('rp.pw', pwStore); save('rp.feedback', feedback); save('rp.appts', appts); save('rp.duties', duties); save('rp.nodienst', noDuty); }
+  function persist() { save('rp.prefs', prefs); save('rp.overrides', overrides); save('rp.notes', notes); save('rp.rights', rights); save('rp.requests', requests); save('rp.gaps', gaps); save('rp.profiles', profiles); save('rp.notifs', notifs); save('rp.pw', pwStore); save('rp.feedback', feedback); save('rp.appts', appts); save('rp.duties', duties); save('rp.nodienst', noDuty); save('rp.dutypub', dutyPub); save('rp.swaps', swaps); }
   persist();
 
   /* =========================================================
@@ -706,7 +708,7 @@
     var today = iso(d) === iso(new Date()), n = apptsOn(p.id, iso(d)).length;
     var html = '<h2 class="day-head' + (today ? ' today' : '') + '"><span>' + esc(longDate(d)) + '</span><span class="note">' + (n ? n + ' afspra' + (n > 1 ? 'ken' : 'ak') + ' · ' : '') + (today ? 'vandaag' : '') + '</span></h2>';
     var add = '<button type="button" class="mini-btn" data-newappt="' + p.id + '|' + iso(d) + '">+ Afspraak toevoegen</button>';
-    if (weekday(d) > 4) return html + '<div class="list">' + dutyCard(p.id, iso(d)) + apptCards(p.id, iso(d), 0) + apptCards(p.id, iso(d), 1) + apptCards(p.id, iso(d), 2) + '</div>' + (n || duties[iso(d)] === p.id ? '' : '<p class="empty">Weekend, geen basisrooster.</p>') + add;
+    if (weekday(d) > 4) return html + '<div class="list">' + dutyCard(p.id, iso(d)) + apptCards(p.id, iso(d), 0) + apptCards(p.id, iso(d), 1) + apptCards(p.id, iso(d), 2) + '</div>' + (n || dutyOf(iso(d)) === p.id ? '' : '<p class="empty">Weekend, geen basisrooster.</p>') + add;
     return html + gapCards(iso(d)) + '<div class="list">' + dutyCard(p.id, iso(d)) + eventCard(p, d, 0) + eventCard(p, d, 1) + apptCards(p.id, iso(d), 2) + '</div>' + add;
   }
 
@@ -770,25 +772,29 @@
   function dutyType(d) { return weekday(d) > 4 ? ['WD', 'Weekenddienst'] : ['D', 'Dagdienst']; }
   function dutyPeople() { return PEOPLE.filter(function (p) { return rights[p.id] && rights[p.id].doetDienst; }); }
   function dutyShort(pid) { return person(pid).name.replace(/^Chirurg /, '').split(' ')[0]; }
-  function isNoDuty(pid, di) { return !!(noDuty[pid] && noDuty[pid][di]); }
+  function isNoDuty(pid, di) { return !!(noDuty[pid] && noDuty[pid][di] === true); }
+  function isNoDutyReq(pid, di) { return !!(noDuty[pid] && noDuty[pid][di] === 'aanvraag'); }
+  function canApproveDuty() { return canPlanDuty() || canApprove(); }
+  /* Binnen 12 weken mag je niet zomaar "geen dienst" zetten: dan wordt het een verzoek voor de (dienst)planner */
+  function within12(di) { return di < iso(earliestVacation()); }
   function absentOn(pid, di) { var r = absenceFor(pid, di, 0) || absenceFor(pid, di, 1); if (r) return r; var d = parseIso(di); if (weekday(d) > 4) return requests.filter(function (x) { return x.person === pid && x.status !== 'declined' && di >= x.from && di <= x.to; })[0] || null; return null; }
   /* AO (Ad en Org) is altijd een hele dag en telt als niet beschikbaar voor dienst */
   function isAO(text) { return codeOf(text || '') === 'AO'; }
   function aoOn(pid, di) { var p = person(pid), d = parseIso(di); return isAO(slot(p, d, 0).text) || isAO(slot(p, d, 1).text); }
   function dutyBlock(pid, di) { if (isNoDuty(pid, di)) return 'geen dienst'; var a = absentOn(pid, di); if (a) return a.type.toLowerCase() + (a.status === 'pending' ? ' (aangevraagd)' : ''); if (aoOn(pid, di)) return 'AO'; return ''; }
-  function dutyStats(year) {
+  function dutyStats(year, onlyPub) {
     var ppl = dutyPeople(), fteSum = ppl.reduce(function (s, p) { return s + (rights[p.id].fte || 0); }, 0) || 1;
     var days = Math.round((new Date(year + 1, 0, 1) - new Date(year, 0, 1)) / 86400000), today = iso(new Date());
     var out = {};
     ppl.forEach(function (p) { var f = rights[p.id].fte || 0; out[p.id] = { fte: f, pct: f / fteSum * 100, doel: f / fteSum * days, gepland: 0, gedaan: 0 }; });
-    Object.keys(duties).forEach(function (di) { var pid = duties[di]; if (!out[pid] || +di.slice(0, 4) !== year) return; out[pid].gepland++; if (di < today) out[pid].gedaan++; });
+    Object.keys(duties).forEach(function (di) { var pid = duties[di]; if (!out[pid] || +di.slice(0, 4) !== year || (onlyPub && !monthPublished(di))) return; out[pid].gepland++; if (di < today) out[pid].gedaan++; });
     return out;
   }
   function assignDuty(di, pid, silent) {
     var d = parseIso(di), dates = [di];
     if (weekday(d) === 5) dates.push(iso(addDays(d, 1))); else if (weekday(d) === 6) dates.push(iso(addDays(d, -1)));
     dates.forEach(function (x) { if (pid) duties[x] = pid; else delete duties[x]; });
-    if (pid && !silent) notify(pid, 'Ingepland voor ' + dutyType(d)[1].toLowerCase() + ': ' + short(parseIso(dates.sort()[0])) + (dates.length > 1 ? ' en ' + short(parseIso(dates[1])) : ''));
+    if (pid && !silent && monthPublished(di)) notify(pid, 'Ingepland voor ' + dutyType(d)[1].toLowerCase() + ': ' + short(parseIso(dates.sort()[0])) + (dates.length > 1 ? ' en ' + short(parseIso(dates[1])) : ''));
   }
   function autoDistribute(monthDate) {
     var y = monthDate.getFullYear(), m = monthDate.getMonth(), st = dutyStats(y), count = {}, made = {}, n = 0;
@@ -807,24 +813,102 @@
       dates.forEach(function (x) { duties[x] = best; });
       count[best] += dates.length; made[best] = (made[best] || 0) + dates.length; n += dates.length;
     }
-    Object.keys(made).forEach(function (pid) { notify(pid, 'Je hebt ' + made[pid] + ' dienst' + (made[pid] > 1 ? 'en' : '') + ' in ' + MONTHS_LONG[m] + ' gekregen'); });
+    if (dutyPub[iso(new Date(y, m, 1)).slice(0, 7)]) Object.keys(made).forEach(function (pid) { notify(pid, 'Je hebt ' + made[pid] + ' dienst' + (made[pid] > 1 ? 'en' : '') + ' in ' + MONTHS_LONG[m] + ' gekregen'); });
     return n;
   }
   function dutyChip(pid, di) {
-    if (duties[di] !== pid) return '';
+    if (dutyOf(di) !== pid) return '';
     var t = dutyType(parseIso(di));
     return '<span class="mbar t-DI"><span>' + t[0] + '</span></span>';
   }
   function dutyCard(pid, di) {
-    if (duties[di] !== pid) return '';
+    if (dutyOf(di) !== pid) return '';
     var t = dutyType(parseIso(di));
     return '<div class="event t-DI" style="cursor:default"><span class="time">hele<br>dag</span><span class="body"><span class="ttl"><span class="code">' + t[0] + '</span><span class="t">' + t[1] + '</span></span></span></div>';
   }
-  function toggleNoDuty(pid, di) {
+  function setNoDuty(pid, di, on) {
     noDuty[pid] = noDuty[pid] || {};
-    if (noDuty[pid][di]) delete noDuty[pid][di]; else noDuty[pid][di] = true;
-    if (noDuty[pid][di] && duties[di] === pid) notify('DIENST', person(pid).name + ' kan geen dienst op ' + short(parseIso(di)) + ', maar staat ingepland');
+    if (!on) { delete noDuty[pid][di]; return 'weg'; }
+    if (noDuty[pid][di]) return noDuty[pid][di] === true ? 'al' : 'aanvraag';
+    if (within12(di) && !canApproveDuty()) {
+      noDuty[pid][di] = 'aanvraag';
+      notify('DIENST', person(pid).name + ' vraagt geen dienst op ' + short(parseIso(di)) + ' (binnen 12 weken): akkoord nodig');
+      return 'aanvraag';
+    }
+    noDuty[pid][di] = true;
+    if (duties[di] === pid) notify('DIENST', person(pid).name + ' kan geen dienst op ' + short(parseIso(di)) + ', maar staat ingepland');
+    return 'ok';
+  }
+  function toggleNoDuty(pid, di) {
+    var had = noDuty[pid] && noDuty[pid][di], res = setNoDuty(pid, di, !had);
     persist();
+    if (res === 'aanvraag') toast('Binnen 12 weken: verzoek naar de dienstplanner gestuurd');
+    return res;
+  }
+  function decideNoDuty(pid, di, ok) {
+    if (!canApproveDuty() || !isNoDutyReq(pid, di)) return;
+    if (ok) { noDuty[pid][di] = true; notify(pid, 'Geen dienst op ' + short(parseIso(di)) + ' is goedgekeurd'); if (duties[di] === pid) notify('DIENST', person(pid).name + ' heeft goedgekeurd geen dienst op ' + short(parseIso(di)) + ', maar staat ingepland'); }
+    else { delete noDuty[pid][di]; notify(pid, 'Geen dienst op ' + short(parseIso(di)) + ' is afgewezen; overleg met de dienstplanner'); }
+    persist();
+  }
+  function noDutyRequests() {
+    var out = [];
+    Object.keys(noDuty).forEach(function (pid) { Object.keys(noDuty[pid]).forEach(function (di) { if (noDuty[pid][di] === 'aanvraag' && di >= iso(new Date())) out.push({ pid: pid, di: di }); }); });
+    return out.sort(function (a, b) { return a.di < b.di ? -1 : 1; });
+  }
+
+  /* ---------- Publiceren: een maand is concept tot de dienstplanner hem publiceert ---------- */
+  function monthPublished(di) { return !!dutyPub[di.slice(0, 7)]; }
+  function dutyVisible(di) { return canPlanDuty() || monthPublished(di); }
+  function dutyOf(di) { return dutyVisible(di) ? duties[di] : undefined; }
+  function publishMonth(ym) {
+    dutyPub[ym] = true;
+    var per = {};
+    Object.keys(duties).forEach(function (di) { if (di.slice(0, 7) === ym) per[duties[di]] = (per[duties[di]] || 0) + 1; });
+    var m = +ym.slice(5, 7) - 1;
+    Object.keys(per).forEach(function (pid) { notify(pid, 'Dienstrooster ' + MONTHS_LONG[m] + ' staat klaar: je hebt ' + per[pid] + ' dienst' + (per[pid] > 1 ? 'en' : '')); });
+    persist();
+  }
+
+  /* ---------- Diensten ruilen: collega gaat akkoord, dan is het direct geregeld ---------- */
+  function swapDates(di) { var d = parseIso(di); return weekday(d) === 5 ? [di, iso(addDays(d, 1))] : weekday(d) === 6 ? [iso(addDays(d, -1)), di] : [di]; }
+  function swapLabel(s) { return short(parseIso(s.fromDate)) + (s.toDate ? ' ⇄ ' + short(parseIso(s.toDate)) : ' (overnemen)'); }
+  function openSwap(di) {
+    var me = state.user, d = parseIso(di), today = iso(new Date());
+    var others = dutyPeople().filter(function (p) { return p.id !== me; });
+    var html = '<p class="note" style="margin:0">Je dienst: <b>' + esc(longDate(d)) + '</b> (' + dutyType(d)[1].toLowerCase() + '). Kies met wie je wilt ruilen. Gaat die collega akkoord, dan is het meteen geregeld en krijgt de dienstplanner een melding.</p>' +
+      '<label class="f">Collega<select id="sw-who">' + others.map(function (p) { var b = swapDates(di).map(function (x) { return dutyBlock(p.id, x); }).filter(Boolean)[0]; return '<option value="' + p.id + '"' + (b ? ' disabled' : '') + '>' + esc(p.name + (b ? ' · kan niet (' + b + ')' : '')) + '</option>'; }).join('') + '</select></label>' +
+      '<label class="f">Wat krijg jij ervoor terug?<select id="sw-back"></select></label>' +
+      '<label class="f">Bericht (optioneel)<input id="sw-msg" maxlength="140" placeholder="Bijv. bruiloft van mijn zus"></label>' +
+      '<button type="button" class="btn" id="sw-send">Ruilverzoek sturen</button>';
+    openSheet('Dienst ruilen', html, function (root) {
+      function fill() {
+        var who = root.querySelector('#sw-who').value, sel = root.querySelector('#sw-back');
+        var theirs = Object.keys(duties).filter(function (x) { return duties[x] === who && x >= today && dutyVisible(x) && weekday(parseIso(x)) !== 6; }).sort()
+          .filter(function (x) { return !swapDates(x).some(function (y) { return dutyBlock(me, y); }); }).slice(0, 20);
+        sel.innerHTML = '<option value="">Niets: collega neemt mijn dienst over</option>' + theirs.map(function (x) { return '<option value="' + x + '">Hun dienst van ' + esc(longDate(parseIso(x))) + '</option>'; }).join('');
+      }
+      root.querySelector('#sw-who').addEventListener('change', fill);
+      var first = root.querySelector('#sw-who option:not([disabled])'); if (first) root.querySelector('#sw-who').value = first.value; fill();
+      root.querySelector('#sw-send').addEventListener('click', function () {
+        var who = root.querySelector('#sw-who').value; if (!who || root.querySelector('#sw-who option:checked').disabled) { toast('Kies een collega die kan'); return; }
+        var s = { id: 'sw' + Date.now(), from: me, fromDate: swapDates(di)[0], to: who, toDate: root.querySelector('#sw-back').value || null, msg: root.querySelector('#sw-msg').value.trim().slice(0, 140), status: 'open', ts: Date.now() };
+        swaps.push(s);
+        notify(who, person(me).name + ' vraagt of je wilt ruilen: ' + swapLabel(s) + ' · zie Diensten');
+        persist(); closeSheet(); render(); toast('Ruilverzoek verstuurd naar ' + person(who).name);
+      });
+    });
+  }
+  function decideSwap(id, ok) {
+    var s = swaps.filter(function (x) { return x.id === id; })[0]; if (!s || s.status !== 'open') return;
+    if (s.to !== state.user && !(isAdmin() && ok === false)) return;
+    if (!ok) { s.status = 'declined'; notify(s.from, person(s.to).name + ' heeft je ruilverzoek afgewezen (' + swapLabel(s) + ')'); persist(); return; }
+    if (duties[s.fromDate] !== s.from || (s.toDate && duties[s.toDate] !== s.to)) { s.status = 'vervallen'; persist(); toast('Dit verzoek klopt niet meer: het rooster is intussen veranderd'); return; }
+    assignDuty(s.fromDate, s.to, true); if (s.toDate) assignDuty(s.toDate, s.from, true);
+    s.status = 'accepted';
+    notify(s.from, person(s.to).name + ' gaat akkoord: dienst geruild (' + swapLabel(s) + ')');
+    notify('DIENST', 'Dienst geruild: ' + person(s.from).name + ' en ' + person(s.to).name + ' (' + swapLabel(s) + ')');
+    persist(); toast('Geruild');
   }
   function renderDiensten() {
     var cur = state.cursor, y = cur.getFullYear(), first = new Date(y, cur.getMonth(), 1), start = mondayOf(first), today = iso(new Date());
@@ -832,7 +916,9 @@
     var me = person(state.user), st = dutyStats(y);
     var html = '';
     if (planner) html += '<div class="seg" style="grid-template-columns:repeat(2,1fr)" role="tablist" aria-label="Weergave"><button type="button" data-dmode="plan" aria-selected="' + (mode === 'plan') + '">Planning</button><button type="button" data-dmode="mijn" aria-selected="' + (mode === 'mijn') + '">Mijn beschikbaarheid</button></div>';
-    if (mode === 'plan') html += '<div class="btn-row"><button type="button" class="btn" id="d-auto">Automatisch verdelen</button><button type="button" class="btn secondary" id="d-clear">Maand leegmaken</button></div><p class="note" style="margin:0">Tik op een dag om iemand in te plannen. Vakantie (ook aangevraagd), AO-dagen en "geen dienst" tellen als niet beschikbaar; in een dag zie je wie geen dienst kan (✕ = zelf opgegeven, AO = Ad en Org, V = vakantie). Verdeling naar FTE.</p>';
+    var ym = iso(first).slice(0, 7), hasAny = Object.keys(duties).some(function (x) { return x.slice(0, 7) === ym; });
+    if (mode === 'plan') html += (hasAny ? (dutyPub[ym] ? '<p class="ok-banner">✓ ' + esc(MONTHS_LONG[cur.getMonth()]) + ' is gepubliceerd: iedereen ziet zijn diensten. Wijzigingen gaan direct door en betrokkenen krijgen een melding.</p>' : '<p class="warn" style="margin:0"><b>Concept.</b> Alleen jij ziet deze diensten. Controleer ze en tik op <b>Publiceren</b>; dan krijgt iedereen zijn diensten te zien en een melding.</p>') : '') +
+      '<div class="btn-row"><button type="button" class="btn" id="d-auto">Uitrollen</button>' + (hasAny && !dutyPub[ym] ? '<button type="button" class="btn" id="d-pub">Publiceren</button>' : '') + '<button type="button" class="btn secondary" id="d-clear">Maand leegmaken</button></div><p class="note" style="margin:0">Tik op een dag om iemand in te plannen. Vakantie (ook aangevraagd), AO-dagen en "geen dienst" tellen als niet beschikbaar; in een dag zie je wie geen dienst kan (✕ = zelf opgegeven, AO = Ad en Org, V = vakantie). Verdeling naar FTE.</p>';
     else html += '<p class="note" style="margin:0">Tik op de dagen waarop je <b>geen dienst</b> kunt. Vakantie en AO-dagen hoef je niet aan te geven; die tellen automatisch mee.</p>';
     html += '<div class="month"><div class="month-head">' + DAYS.map(function (x) { return '<span>' + x + '</span>'; }).join('') + '</div><div class="month-grid">';
     for (var i = 0; i < 42; i++) {
@@ -849,10 +935,12 @@
           var tag = why === 'geen dienst' ? '✕' : why === 'AO' ? 'AO' : absLetter(absentOn(p.id, di));
           if (!grp[tag]) { grp[tag] = []; order.push(tag); } grp[tag].push({ p: p, why: why });
         });
+        var rq = dutyPeople().filter(function (p) { return p.id !== pid && isNoDutyReq(p.id, di); });
+        if (rq.length) { grp['✕?'] = rq.map(function (p) { return { p: p, why: 'verzoek geen dienst, nog niet goedgekeurd' }; }); order.push('✕?'); }
         order.forEach(function (tag) { var xs = grp[tag]; inner += '<span class="mbar t-AF pend" title="' + esc('Geen dienst: ' + xs.map(function (x) { return x.p.name + ' (' + x.why + ')'; }).join(', ')) + '">' + esc(tag + ' ' + xs.map(function (x) { return dutyShort(x.p.id); }).join(' ')) + '</span>'; });
       } else {
-        var own = state.user, nd = isNoDuty(own, di), ab = absentOn(own, di), ao = !ab && aoOn(own, di);
-        inner = (duties[di] === own ? '<span class="mbar t-DI">' + dutyType(d)[0] + '</span>' : '') + (nd ? '<span class="mbar t-AF pend">geen</span>' : '') + (ao ? '<span class="mbar t-AF">AO</span>' : '') + (ab ? '<span class="mbar t-AF">' + absLetter(ab) + '</span>' : '');
+        var own = state.user, nd = isNoDuty(own, di), ndr = isNoDutyReq(own, di), ab = absentOn(own, di), ao = !ab && aoOn(own, di);
+        inner = (dutyOf(di) === own ? '<span class="mbar t-DI">' + dutyType(d)[0] + '</span>' : '') + (nd ? '<span class="mbar t-AF pend">geen</span>' : '') + (ndr ? '<span class="mbar t-AF pend" title="Verzoek, wacht op akkoord">geen?</span>' : '') + (ao ? '<span class="mbar t-AF">AO</span>' : '') + (ab ? '<span class="mbar t-AF">' + absLetter(ab) + '</span>' : '');
       }
       html += '<button type="button" class="mday' + (d.getMonth() !== cur.getMonth() ? ' out' : '') + (wd > 4 ? ' weekend' : '') + (di === today ? ' today' : '') + '" data-dday="' + di + '"><span class="mnum">' + d.getDate() + '</span>' + inner + '</button>';
     }
@@ -862,15 +950,42 @@
       var ndRows = dutyPeople().map(function (p) { return { p: p, days: Object.keys(noDuty[p.id] || {}).filter(function (x) { return noDuty[p.id][x] && x.slice(0, 7) === mPrefix; }).sort() }; }).filter(function (r) { return r.days.length; });
       html += '<section class="card"><h2>Geen dienst opgegeven in ' + esc(MONTHS_LONG[cur.getMonth()]) + '</h2>' + (ndRows.length ? ndRows.map(function (r) { return '<div class="w-row"><span>' + esc(r.p.name) + '</span><b style="text-align:right">' + esc(r.days.map(function (x) { return short(parseIso(x)); }).join(', ')) + '</b></div>'; }).join('') : '<p class="empty">Nog niemand heeft dagen opgegeven.</p>') + '</section>';
     }
-    var mine = Object.keys(duties).filter(function (di) { return duties[di] === state.user && di >= today; }).sort().slice(0, 8);
-    if (!isAdmin()) html += '<section class="card"><h2>Mijn komende diensten</h2>' + (mine.length ? mine.map(function (di) { return '<div class="w-row"><span>' + esc(longDate(parseIso(di))) + '</span><b>' + dutyType(parseIso(di))[1] + '</b></div>'; }).join('') : '<p class="empty">Geen diensten ingepland.</p>') + '</section>';
-    var rows = canSeeDutyAll() ? dutyPeople() : dutyPeople().filter(function (p) { return p.id === state.user; });
+    if (canApproveDuty()) {
+      var rqs = noDutyRequests();
+      if (rqs.length) html += '<section class="card"><h2>Geen-dienstverzoeken binnen 12 weken</h2>' + rqs.map(function (r) { return '<div class="w-row"><span>' + esc(person(r.pid).name + ' · ' + longDate(parseIso(r.di))) + (duties[r.di] === r.pid ? ' <small class="impact">staat ingepland</small>' : '') + '</span><span class="btn-row" style="margin:0;flex:none"><button type="button" class="mini-btn" data-ndok="' + r.pid + '|' + r.di + '">Akkoord</button><button type="button" class="mini-btn" data-ndno="' + r.pid + '|' + r.di + '">Afwijzen</button></span></div>'; }).join('') + '</section>';
+    }
+    var inSw = swaps.filter(function (s) { return s.to === state.user && s.status === 'open'; }), outSw = swaps.filter(function (s) { return s.from === state.user && s.status === 'open'; });
+    if (inSw.length || outSw.length) html += '<section class="card"><h2>Ruilverzoeken</h2>' +
+      inSw.map(function (s) { return '<div class="w-row"><span><b>' + esc(person(s.from).name) + '</b> wil ruilen: ' + esc(swapLabel(s)) + (s.msg ? '<br><small>“' + esc(s.msg) + '”</small>' : '') + '</span><span class="btn-row" style="margin:0;flex:none"><button type="button" class="mini-btn" data-swok="' + s.id + '">Akkoord</button><button type="button" class="mini-btn" data-swno="' + s.id + '">Nee</button></span></div>'; }).join('') +
+      outSw.map(function (s) { return '<div class="w-row"><span>Aan ' + esc(person(s.to).name) + ': ' + esc(swapLabel(s)) + ' <small>wacht op antwoord</small></span><button type="button" class="mini-btn" data-swx="' + s.id + '">Intrekken</button></div>'; }).join('') + '</section>';
+    var mine = Object.keys(duties).filter(function (di) { return duties[di] === state.user && di >= today && dutyVisible(di) && weekday(parseIso(di)) !== 6; }).sort().slice(0, 10);
+    if (!isAdmin()) html += '<section class="card"><h2>Mijn komende diensten</h2>' + (mine.length ? mine.map(function (di) { var open1 = swaps.some(function (s) { return s.status === 'open' && s.fromDate === swapDates(di)[0] && s.from === state.user; }); return '<div class="w-row"><span>' + esc(longDate(parseIso(di))) + ' · ' + dutyType(parseIso(di))[1].toLowerCase() + '</span>' + (open1 ? '<small>ruil gevraagd</small>' : '<button type="button" class="mini-btn" data-swap="' + di + '">Ruilen</button>') + '</div>'; }).join('') : '<p class="empty">Geen diensten ingepland' + (canPlanDuty() ? '' : ' (of nog niet gepubliceerd)') + '.</p>') + '</section>';
+    st = dutyStats(y, !canPlanDuty());
+    var rows = dutyPeople();
     if (rows.length) html += '<section class="card"><h2>FTE en diensten ' + y + '</h2><div style="overflow-x:auto"><table class="dtable"><thead><tr><th>Naam</th><th>FTE</th><th>% dienst</th><th>Doel</th><th>Ingepland</th><th>Gedaan</th></tr></thead><tbody>' +
       rows.map(function (p) { var s = st[p.id]; return '<tr><td>' + esc(p.name) + '</td><td>' + fmtN(s.fte) + '</td><td>' + fmtN(Math.round(s.pct * 10) / 10) + '%</td><td>' + Math.round(s.doel) + '</td><td>' + s.gepland + '</td><td>' + s.gedaan + '</td></tr>'; }).join('') +
-      '</tbody></table></div><p class="note" style="margin:0">% dienst = eigen FTE gedeeld door de FTE van iedereen die dienst doet. Doel = dat percentage van alle dagen in ' + y + '. FTE stelt de beheerder in.</p></section>';
+      '</tbody></table></div><p class="note" style="margin:0">% dienst = eigen FTE gedeeld door de FTE van iedereen die dienst doet. Doel = dat percentage van alle dagen in ' + y + '. Iedereen ziet deze tabel; telt alleen gepubliceerde diensten' + (canPlanDuty() ? ' (jij ziet ook het concept)' : '') + '. FTE stelt de beheerder in.</p></section>';
     main.innerHTML = html;
     main.querySelectorAll('[data-dmode]').forEach(function (b) { b.addEventListener('click', function () { state.dutyMode = b.getAttribute('data-dmode'); render(); }); });
-    var au = document.getElementById('d-auto'); if (au) au.addEventListener('click', function () { var n = autoDistribute(cur); persist(); render(); toast(n ? n + ' dienstdagen verdeeld' : 'Niets te verdelen'); });
+    main.querySelectorAll('[data-ndok],[data-ndno]').forEach(function (b) { b.addEventListener('click', function () { var v = (b.getAttribute('data-ndok') || b.getAttribute('data-ndno')).split('|'); decideNoDuty(v[0], v[1], b.hasAttribute('data-ndok')); render(); }); });
+    main.querySelectorAll('[data-swok],[data-swno]').forEach(function (b) { b.addEventListener('click', function () { decideSwap(b.getAttribute('data-swok') || b.getAttribute('data-swno'), b.hasAttribute('data-swok')); render(); }); });
+    main.querySelectorAll('[data-swx]').forEach(function (b) { b.addEventListener('click', function () { swaps.forEach(function (s) { if (s.id === b.getAttribute('data-swx')) { s.status = 'ingetrokken'; notify(s.to, person(s.from).name + ' heeft het ruilverzoek ingetrokken'); } }); persist(); render(); }); });
+    main.querySelectorAll('[data-swap]').forEach(function (b) { b.addEventListener('click', function () { openSwap(b.getAttribute('data-swap')); }); });
+    var au = document.getElementById('d-auto'); if (au) au.addEventListener('click', function () {
+      var nd = 0, rqn = 0, ab = 0, ao = 0, open = 0;
+      for (var dd = new Date(first); dd.getMonth() === cur.getMonth(); dd = addDays(dd, 1)) {
+        var di2 = iso(dd); if (!duties[di2]) open++;
+        dutyPeople().forEach(function (p) { if (isNoDuty(p.id, di2)) nd++; else if (absentOn(p.id, di2)) ab++; else if (aoOn(p.id, di2)) ao++; if (isNoDutyReq(p.id, di2)) rqn++; });
+      }
+      showAlert('Diensten ' + MONTHS_LONG[cur.getMonth()] + ' uitrollen',
+        'Het systeem houdt eerst rekening met:\n• ' + nd + '× geen dienst (opgegeven)\n• ' + ab + '× vakantie of andere afwezigheid\n• ' + ao + '× AO\n' + (rqn ? '• ' + rqn + '× geen-dienstverzoek dat nog niet is goedgekeurd: telt nog NIET mee\n' : '') +
+        '\nDaarna verdeelt het de ' + open + ' lege dagen eerlijk naar FTE, op basis van wat iedereen dit jaar al heeft. Bestaande diensten blijven staan.' + (dutyPub[ym] ? '' : '\n\nHet blijft een concept tot je op Publiceren tikt.'),
+        'Uitrollen', 'Annuleren', function () { var n = autoDistribute(cur); persist(); render(); toast(n ? n + ' dienstdagen verdeeld · controleer en publiceer' : 'Niets te verdelen'); });
+    });
+    var pb = document.getElementById('d-pub'); if (pb) pb.addEventListener('click', function () {
+      var bad = Object.keys(duties).filter(function (x) { return x.slice(0, 7) === ym && dutyBlock(duties[x], x); }).length;
+      showAlert('Publiceren?', 'Iedereen ziet daarna zijn diensten voor ' + MONTHS_LONG[cur.getMonth()] + ' en krijgt een melding.' + (bad ? '\n\nLet op: ' + bad + ' dag(en) met iemand die eigenlijk niet kan (rood met !).' : ''), 'Publiceren', 'Nog niet', function () { publishMonth(ym); render(); toast('Gepubliceerd'); });
+    });
     var cl = document.getElementById('d-clear'); if (cl) cl.addEventListener('click', function () { if (!window.confirm('Alle diensten in ' + MONTHS_LONG[cur.getMonth()] + ' leegmaken?')) return; Object.keys(duties).forEach(function (di) { var dd = parseIso(di); if (dd.getMonth() === cur.getMonth() && dd.getFullYear() === y) delete duties[di]; }); persist(); render(); });
     main.querySelectorAll('[data-dday]').forEach(function (b) {
       b.addEventListener('click', function () {
@@ -886,7 +1001,7 @@
       .sort(function (a, b) { return (!!a.bl - !!b.bl) || a.ratio - b.ratio; });
     var html = '<p class="note" style="margin:0">' + esc(t[1] + (weekday(d) > 4 ? ' (zaterdag en zondag samen)' : '')) + '</p><div class="cands">' + list.map(function (c) {
       var s = st[c.p.id];
-      return '<button type="button" class="cand" data-dpick="' + c.p.id + '"' + (cur === c.p.id ? ' style="box-shadow:inset 0 0 0 2px var(--tint)"' : '') + '><span>' + esc(c.p.name) + ' <small>' + (c.bl ? 'Niet beschikbaar: ' + esc(c.bl) : s.gepland + ' van ~' + Math.round(s.doel) + ' diensten · FTE ' + fmtN(s.fte)) + '</small></span><span class="go">' + (cur === c.p.id ? 'Ingepland' : 'Kies') + '</span></button>';
+      return '<button type="button" class="cand" data-dpick="' + c.p.id + '"' + (cur === c.p.id ? ' style="box-shadow:inset 0 0 0 2px var(--tint)"' : '') + '><span>' + esc(c.p.name) + ' <small>' + (c.bl ? 'Niet beschikbaar: ' + esc(c.bl) : isNoDutyReq(c.p.id, di) ? 'Vraagt geen dienst (nog niet goedgekeurd) · ' + s.gepland + ' van ~' + Math.round(s.doel) : s.gepland + ' van ~' + Math.round(s.doel) + ' diensten · FTE ' + fmtN(s.fte)) + '</small></span><span class="go">' + (cur === c.p.id ? 'Ingepland' : 'Kies') + '</span></button>';
     }).join('') + '</div>' + (cur ? '<button type="button" class="btn secondary" id="d-none">Niemand (leegmaken)</button>' : '');
     openSheet(longDate(d), html, function (root) {
       root.querySelectorAll('[data-dpick]').forEach(function (b) {
@@ -945,7 +1060,7 @@
     var cols = '3rem repeat(' + days.length + ', minmax(0, 1fr))';
     var todayIso = iso(new Date());
     var html = '<div class="tgrid"><div class="tg-head" style="grid-template-columns:' + cols + '"><span></span>' + days.map(function (d) {
-      return '<button type="button" data-goto="' + iso(d) + '" class="' + (iso(d) === todayIso ? 'today' : '') + '"><span>' + DAYS[weekday(d)] + '</span><span class="n">' + d.getDate() + '</span>' + (duties[iso(d)] === p.id ? '<span class="code" style="background:var(--DI-bar);color:#fff;font-size:.6rem;padding:0 4px;border-radius:4px">' + dutyType(d)[0] + '</span>' : '') + '</button>';
+      return '<button type="button" data-goto="' + iso(d) + '" class="' + (iso(d) === todayIso ? 'today' : '') + '"><span>' + DAYS[weekday(d)] + '</span><span class="n">' + d.getDate() + '</span>' + (dutyOf(iso(d)) === p.id ? '<span class="code" style="background:var(--DI-bar);color:#fff;font-size:.6rem;padding:0 4px;border-radius:4px">' + dutyType(d)[0] + '</span>' : '') + '</button>';
     }).join('') + '</div><div class="tg-body" style="grid-template-columns:' + cols + ';height:' + total + 'rem"><div class="tg-hours">';
     for (var hr = GRID_START + 1; hr < GRID_END; hr++) html += '<span class="tg-hour" style="top:' + ((hr - GRID_START) * hourH) + 'rem">' + hr + ':00</span>';
     html += '</div>';
@@ -1236,7 +1351,20 @@
     }
   }
   function myNotifs() {
-    return notifs.filter(function (n) { return n.to === state.user || (n.to === 'PLANNERS' && canApprove()) || (n.to === 'DIENST' && canPlanDuty()); }).sort(function (a, b) { return b.ts - a.ts; });
+    return notifs.filter(function (n) { return !(n.hidden && n.hidden[state.user]); }).filter(function (n) { return n.to === state.user || (n.to === 'PLANNERS' && canApprove()) || (n.to === 'DIENST' && canPlanDuty()); }).sort(function (a, b) { return b.ts - a.ts; });
+  }
+  function hideNotif(id) {
+    notifs.forEach(function (n) { if (id === '*' ? myNotifs().indexOf(n) >= 0 : n.id === id) { n.hidden = n.hidden || {}; n.hidden[state.user] = true; } });
+  }
+  function notifList(list, compact) {
+    if (!list.length) return '<p class="empty">Geen meldingen.</p>';
+    return '<div class="notif-list">' + list.map(function (n) {
+      return '<div class="notif' + (n.read ? '' : ' unread') + '"><span class="nt">' + esc(n.text) + (compact ? '' : '<small>' + esc(ago(n.ts)) + '</small>') + '</span><button type="button" class="x-btn" data-nx="' + n.id + '" aria-label="Melding verwijderen">×</button></div>';
+    }).join('') + '</div>';
+  }
+  function bindNotifs(root, after) {
+    root.querySelectorAll('[data-nx]').forEach(function (b) { b.addEventListener('click', function (e) { e.stopPropagation(); hideNotif(b.getAttribute('data-nx')); persist(); after(); }); });
+    var all = root.querySelector('[data-nxall]'); if (all) all.addEventListener('click', function (e) { e.stopPropagation(); e.preventDefault(); hideNotif('*'); persist(); after(); });
   }
   function ago(ts) {
     var m = Math.round((Date.now() - ts) / 60000);
@@ -1381,6 +1509,21 @@
       root.querySelector('#pc-abs').addEventListener('click', function () { openRequest(pid, dIso, 'dag'); });
     });
   }
+  /* Wat wordt er overschreven als je dit inplant? (voor de bevestiging) */
+  function planConflicts(pids, dateIso, halves, text) {
+    if (isAO(text)) halves = [0, 1];
+    var d = parseIso(dateIso), out = [];
+    pids.forEach(function (pid) {
+      halves.forEach(function (h) {
+        var s = slot(person(pid), d, h), was = s.absent ? s.absent.type.toLowerCase() + ' (afwezig)' : s.text;
+        if (was && was !== text) out.push(person(pid).name + ' · ' + HALVES[h].toLowerCase() + ': ' + was);
+      });
+      var a = apptsOn(pid, dateIso, null).filter(function (x) { return halves.indexOf(x.part) >= 0; });
+      if (a.length && isAO(text)) out.push(person(pid).name + ': ' + a.length + ' afspraak' + (a.length > 1 ? 'en' : '') + ' blijft staan, controleer die');
+      if (isAO(text) && duties[dateIso] === pid) out.push(person(pid).name + ' heeft die dag dienst; de dienstplanner krijgt een melding');
+    });
+    return out;
+  }
   function planBlocks(pids, dateIso, halves, text, noteText, doNotify) {
     if (isAO(text)) halves = [0, 1]; /* AO is altijd de hele dag */
     var v = { pids: pids, date: dateIso, halves: halves, text: text }, d = parseIso(dateIso);
@@ -1451,10 +1594,15 @@
         var v = vals(); if (!v.date || !v.pids.length || !v.text) { preview(); return; }
         var d = parseIso(v.date); if (weekday(d) > 4) { preview(); return; }
         var noteText = root.querySelector('#pl-note').value.trim(), doNotify = root.querySelector('#pl-notify').checked;
-        var res = planBlocks(v.pids, v.date, v.halves, v.text, noteText, doNotify), newGaps = res.gaps, planId = res.planId;
-        persist(); render();
-        if (newGaps.length) openGaps(function (g) { return g.reqId === planId; }, 'Ingepland · ' + newGaps.length + ' nieuw tekort');
-        else { closeSheet(); toast('Ingepland' + (doNotify ? ' en betrokkenen op de hoogte gebracht' : '')); }
+        function go() {
+          var res = planBlocks(v.pids, v.date, v.halves, v.text, noteText, doNotify), newGaps = res.gaps, planId = res.planId;
+          persist(); render();
+          if (newGaps.length) openGaps(function (g) { return g.reqId === planId; }, 'Ingepland · ' + newGaps.length + ' nieuw tekort');
+          else { closeSheet(); toast('Ingepland' + (doNotify ? ' en betrokkenen op de hoogte gebracht' : '')); }
+        }
+        var conf = planConflicts(v.pids, v.date, v.halves, v.text);
+        if (conf.length) showAlert((isAO(v.text) ? 'AO is de hele dag. ' : '') + 'Dit vervangt wat er al staat', conf.join('\n') + '\n\nWil je dit echt vervangen door ' + v.text + '?', 'Ja, vervangen', 'Annuleren', go);
+        else go();
       });
     });
   }
@@ -1477,9 +1625,7 @@
   function openProfile() {
     var me = person(state.user), pr = profiles[state.user] || {}, list = myNotifs().slice(0, 15);
     var html = '<div class="profile-head"><span class="big">' + esc(isAdmin() ? '★' : me.id) + '</span><div><b style="font-size:1.1rem">' + esc(me.name) + '</b><div class="note">' + esc(me.group + ' · ' + roleLabel(me.id) + ' · ' + usernameOf(me.id)) + '</div></div></div>' +
-      '<div class="card"><h3>Meldingen</h3>' + (list.length ? '<div class="notes">' + list.map(function (n) {
-        return '<div class="note-item' + (n.read ? '' : ' shared') + '"><span>' + esc(n.text) + '</span><span class="by"><span>' + esc(ago(n.ts)) + '</span>' + (n.read ? '' : '<span class="pill">nieuw</span>') + '</span></div>';
-      }).join('') + '</div>' : '<p class="empty">Geen meldingen.</p>') + '</div>';
+      '<details class="card fold" id="pf-notifs"' + (prefs.notifClosed ? '' : ' open') + '><summary><h3>Meldingen' + (list.length ? ' <span class="pill">' + list.length + '</span>' : '') + '</h3>' + (list.length ? '<button type="button" class="text-btn" data-nxall>Alles wissen</button>' : '') + '</summary>' + notifList(list) + '</details>';
     if (!isAdmin()) html += '<div class="card"><h3>Vakantie- en congresdagen</h3>' + saldoHtml(state.user) + '</div>';
     html += '<div class="card"><h3>Over mij</h3><p class="note" style="margin:0">Zichtbaar voor de planner en de beheerder.</p>' + PROFILE_FIELDS.map(function (f) {
       return '<label class="f">' + esc(f[1]) + '<input data-pf="' + f[0] + '" type="' + f[4] + '" autocomplete="' + f[3] + '" maxlength="80" value="' + esc(pr[f[0]] || '') + '" placeholder="' + esc(f[2]) + '"></label>';
@@ -1507,6 +1653,8 @@
       root.querySelector('#pf-settings').addEventListener('click', function () { openSettings(); });
       root.querySelector('#pf-logout').addEventListener('click', logout);
       var sw = root.querySelector('#pf-switch'); if (sw) sw.addEventListener('click', openSwitch);
+      var fold = root.querySelector('#pf-notifs'); fold.addEventListener('toggle', function () { prefs.notifClosed = !fold.open; persist(); });
+      bindNotifs(root, function () { openProfile(); render(); });
     });
     myNotifs().forEach(function (n) { n.read = true; });
     persist(); render();
@@ -1707,8 +1855,10 @@
       for (var i = 0; i < 28; i++) { var d = addDays(today, i); if (weekday(d) > 4) continue; rooster.push({ datum: iso(d), ochtend: slotTxt(slot(me, d, 0)), middag: slotTxt(slot(me, d, 1)) }); }
       ctx.mijnRooster = rooster;
       ctx.mijnAanvragen = requests.filter(function (r) { return r.person === state.user && r.to >= iso(today); }).map(function (r) { return { soort: r.type, van: r.from, tot: r.to, status: r.status }; });
-      ctx.mijnDiensten = Object.keys(duties).filter(function (di) { return duties[di] === state.user && di >= iso(today); }).sort();
-      ctx.mijnGeenDienst = Object.keys(noDuty[state.user] || {}).filter(function (di) { return di >= iso(today); }).sort();
+      ctx.mijnDiensten = Object.keys(duties).filter(function (di) { return duties[di] === state.user && di >= iso(today) && dutyVisible(di); }).sort();
+      ctx.mijnGeenDienst = Object.keys(noDuty[state.user] || {}).filter(function (di) { return di >= iso(today) && noDuty[state.user][di] === true; }).sort();
+      ctx.mijnGeenDienstVerzoeken = Object.keys(noDuty[state.user] || {}).filter(function (di) { return di >= iso(today) && noDuty[state.user][di] === 'aanvraag'; }).sort();
+      ctx.regel12weken = 'Geen dienst binnen 12 weken (voor ' + iso(earliestVacation()) + ') wordt een verzoek dat de dienstplanner moet goedkeuren.';
       var sd = saldoOf(state.user); ctx.saldoDagen = { vakantie: sd.vak, congres: sd.con };
     }
     if (canPlanDuty() || canApprove()) {
@@ -1717,10 +1867,12 @@
         for (var d2 = new Date(y, today.getMonth() + m, 1), mm = d2.getMonth(); d2.getMonth() === mm; d2 = addDays(d2, 1)) {
           var di = iso(d2), weg = {};
           dutyPeople().forEach(function (p) { var b = dutyBlock(p.id, di); if (b) weg[p.id] = b; });
-          dl.push({ datum: di, dag: DAGNAMEN[weekday(d2)], soort: dutyType(d2)[1], ingepland: duties[di] || null, nietBeschikbaar: weg });
+          var vz = dutyPeople().filter(function (p) { return isNoDutyReq(p.id, di); }).map(function (p) { return p.id; });
+          dl.push({ datum: di, dag: DAGNAMEN[weekday(d2)], soort: dutyType(d2)[1], ingepland: dutyOf(di) || null, nietBeschikbaar: weg, geenDienstVerzoekNietGoedgekeurd: vz.length ? vz : undefined });
         }
       }
       ctx.diensten = dl;
+      ctx.maandStatus = {}; [0, 1].forEach(function (k) { var ym = iso(new Date(y, today.getMonth() + k, 1)).slice(0, 7); ctx.maandStatus[ym] = dutyPub[ym] ? 'gepubliceerd' : 'concept'; });
       var st = dutyStats(y), ver = {};
       Object.keys(st).forEach(function (pid) { var s = st[pid]; ver[pid] = { fte: s.fte, procent: Math.round(s.pct * 10) / 10, doelJaar: Math.round(s.doel), ingepland: s.gepland, gedaan: s.gedaan }; });
       ctx.dienstVerdeling = ver;
@@ -1736,11 +1888,6 @@
   function isDate(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(parseIso(s)); }
   function aiPid(x) { if (!x) return isAdmin() ? null : state.user; return person(x) && x !== 'ADMIN' ? x : null; }
   function halfOf(dd) { return dd === 'ochtend' ? 0 : dd === 'middag' ? 1 : null; }
-  function setNoDuty(pid, di, on) {
-    noDuty[pid] = noDuty[pid] || {};
-    if (on) { noDuty[pid][di] = true; if (duties[di] === pid) notify('DIENST', person(pid).name + ' kan geen dienst op ' + short(parseIso(di)) + ', maar staat ingepland'); }
-    else delete noDuty[pid][di];
-  }
   // Elke actie: describe (tekst op de kaart) en run (geeft foutmelding terug of '' bij succes). Rechten worden hier opnieuw gecontroleerd.
   var AI_ACTIONS = {
     ziek_melden: {
@@ -1774,7 +1921,8 @@
       run: function (i) {
         if (isAdmin() || !dutyPeople().some(function (p) { return p.id === state.user; })) return 'je staat niet op de dienstlijst';
         var ds = (i.datums || []).filter(isDate); if (!ds.length) return 'geen geldige datums';
-        ds.forEach(function (di) { setNoDuty(state.user, di, i.kan_niet !== false); }); persist(); render(); toast('Opgeslagen voor de dienstplanner'); return '';
+        var req = 0; ds.forEach(function (di) { if (setNoDuty(state.user, di, i.kan_niet !== false) === 'aanvraag') req++; }); persist(); render();
+        toast(req ? req + ' dag' + (req > 1 ? 'en' : '') + ' binnen 12 weken: verzoek naar de dienstplanner' : 'Opgeslagen voor de dienstplanner'); return '';
       }
     },
     dienst_inplannen: {
@@ -1795,7 +1943,10 @@
       }
     },
     inplannen: {
-      describe: function (i) { return 'Inplannen: ' + (i.activiteit || '?') + ' · ' + (i.personen || []).map(function (x) { var p = aiPid(x); return p ? person(p).name : '?'; }).join(', ') + ' · ' + (isDate(i.datum) ? short(parseIso(i.datum)) : '?') + ' ' + (i.dagdeel === 'dag' ? 'hele dag' : i.dagdeel) + (i.notitie ? ' · “' + i.notitie + '”' : ''); },
+      describe: function (i) {
+        var pids = (i.personen || []).map(aiPid).filter(Boolean), h = halfOf(i.dagdeel), conf = isDate(i.datum) && i.activiteit ? planConflicts(pids, i.datum, h == null ? [0, 1] : [h], String(i.activiteit)) : [];
+        return 'Inplannen: ' + (i.activiteit || '?') + ' · ' + (i.personen || []).map(function (x) { var p = aiPid(x); return p ? person(p).name : '?'; }).join(', ') + ' · ' + (isDate(i.datum) ? short(parseIso(i.datum)) : '?') + ' ' + (i.dagdeel === 'dag' || isAO(i.activiteit) ? 'hele dag' : i.dagdeel) + (i.notitie ? ' · “' + i.notitie + '”' : '') + (conf.length ? '\n⚠ Vervangt: ' + conf.join('; ') : '');
+      },
       run: function (i) {
         if (!canApprove()) return 'alleen een planner of beheerder kan inplannen';
         var pids = (i.personen || []).map(aiPid).filter(Boolean); if (!pids.length) return 'geen geldige personen';
@@ -1814,7 +1965,7 @@
   function aiRenderLog() {
     var log = document.getElementById('ai-log'); if (!log) return;
     var html = '';
-    if (!ai.msgs.length) html = '<p class="note" style="margin:0">Vraag iets over het rooster of de app, of laat me iets klaarzetten. Ik doe niets zonder dat jij op <b>Toepassen</b> tikt. Zet hier geen patiëntgegevens in.</p><div class="ai-sugs">' + aiSuggestions().map(function (s) { return '<button type="button" class="chip" data-aisug="' + esc(s) + '">' + esc(s) + '</button>'; }).join('') + '</div>';
+    if (!ai.msgs.length) html = '<div class="ai-hello">' + AI_ICON + '<h3>Waarmee kan ik helpen, ' + esc(person(state.user).name.split(' ')[0] === 'Chirurg' ? person(state.user).name : person(state.user).name.split(' ')[0]) + '?</h3><p>Vraag iets over het rooster of de app, of laat me iets klaarzetten. Ik doe niets zonder dat jij op <b>Toepassen</b> tikt. Zet hier geen patiëntgegevens in.</p></div><div class="ai-sugs">' + aiSuggestions().map(function (s) { return '<button type="button" class="chip" data-aisug="' + esc(s) + '">' + esc(s) + '</button>'; }).join('') + '</div>';
     ai.msgs.forEach(function (m) {
       if (m.role === 'user') {
         var txt = typeof m.content === 'string' ? m.content : (m.content.filter(function (b) { return b.type === 'text'; })[0] || {}).text;
@@ -1822,16 +1973,16 @@
         return;
       }
       (m.content || []).forEach(function (b) {
-        if (b.type === 'text' && b.text.trim()) html += '<div class="ai-msg">' + esc(b.text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>') + '</div>';
+        if (b.type === 'text' && b.text.trim()) html += '<div class="ai-msg">' + AI_ICON + '<div>' + esc(b.text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>') + '</div></div>';
         if (b.type === 'tool_use') {
           var act = AI_ACTIONS[b.name], st = ai.status[b.id] || 'open';
-          html += '<div class="ai-act"><span>' + esc(act ? act.describe(b.input || {}) : b.name) + '</span>' +
+          html += '<div class="ai-act"><span>' + esc(act ? act.describe(b.input || {}) : b.name).replace(/\n/g, '<br>') + '</span>' +
             (st === 'open' ? '<span class="btn-row"><button type="button" class="btn" data-aiok="' + b.id + '">Toepassen</button><button type="button" class="btn secondary" data-aino="' + b.id + '">Niet doen</button></span>'
               : '<small>' + (st === 'done' ? '✓ Toegepast' : st === 'skipped' ? 'Niet gedaan' : 'Lukte niet: ' + esc(st)) + '</small>') + '</div>';
         }
       });
     });
-    if (ai.busy) html += '<div class="ai-msg typing">Even denken…</div>';
+    if (ai.busy) html += '<div class="ai-msg typing">' + AI_ICON + '<div>Even denken…</div></div>';
     log.innerHTML = html;
     log.querySelectorAll('[data-aisug]').forEach(function (b) { b.addEventListener('click', function () { aiSend(b.getAttribute('data-aisug')); }); });
     log.querySelectorAll('[data-aiok],[data-aino]').forEach(function (b) {
@@ -1861,10 +2012,17 @@
       .catch(function (e) { ai.msgs.pop(); toast(e.message && e.message.length < 120 ? e.message : 'De assistent is nu niet bereikbaar'); var inp = document.getElementById('ai-in'); if (inp && !inp.value) inp.value = text; })
       .then(function () { ai.busy = false; aiRenderLog(); });
   }
+  var AI_ICON = '<svg class="ai-ico" viewBox="0 0 24 24" aria-hidden="true"><g stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 3.5v17"/><path d="M4.6 7.75l14.8 8.5"/><path d="M4.6 16.25l14.8-8.5"/></g></svg>';
+  sheet.addEventListener('close', function () { sheet.classList.remove('ai-sheet'); });
   function openAssistant() {
-    openSheet('Assistent', '<div id="ai-log" class="ai-log"></div><form id="ai-form" class="ai-form"><input id="ai-in" maxlength="500" autocomplete="off" placeholder="Bijv. ik kan 12 en 13 december geen dienst"><button type="submit" class="btn" aria-label="Versturen">↑</button></form>' +
-      '<button type="button" class="text-btn" id="ai-new" style="align-self:flex-start">Nieuw gesprek</button>', function (root) {
-      root.querySelector('#ai-form').addEventListener('submit', function (e) { e.preventDefault(); var inp = root.querySelector('#ai-in'); var v = inp.value; inp.value = ''; aiSend(v); });
+    sheet.classList.add('ai-sheet');
+    openSheet('Assistent', '<div id="ai-log" class="ai-log"></div><form id="ai-form" class="ai-form"><textarea id="ai-in" rows="1" maxlength="500" autocomplete="off" placeholder="Vraag of laat iets klaarzetten…"></textarea><div class="ai-form-bar"><button type="button" class="text-btn" id="ai-new">Nieuw gesprek</button><button type="submit" class="ai-send" aria-label="Versturen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/></svg></button></div></form>' +
+      '<p class="ai-foot">Werkt met Claude van Anthropic. Kan fouten maken: controleer een voorstel voordat je op Toepassen tikt.</p>', function (root) {
+      var h2 = root.querySelector('#sheet-title'); if (h2) h2.innerHTML = AI_ICON + 'Assistent';
+      var ta = root.querySelector('#ai-in');
+      ta.addEventListener('input', function () { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 140) + 'px'; });
+      ta.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); root.querySelector('#ai-form').requestSubmit(); } });
+      root.querySelector('#ai-form').addEventListener('submit', function (e) { e.preventDefault(); var v = ta.value; ta.value = ''; ta.style.height = 'auto'; aiSend(v); });
       root.querySelector('#ai-new').addEventListener('click', function () { ai.msgs = []; ai.status = {}; aiRenderLog(); });
       aiRenderLog();
     });
@@ -1901,7 +2059,7 @@
       for (var i = 0; i < 42; i++) { var d = addDays(st, i); if (i >= 35 && d.getMonth() !== cur.getMonth()) break; h2 += '<button type="button" data-wgo="' + iso(d) + '" class="' + (d.getMonth() !== cur.getMonth() ? 'out ' : '') + (iso(d) === ti ? 'today ' : '') + (iso(d) === iso(cur) ? 'sel' : '') + '">' + d.getDate() + '</button>'; }
       return h2 + '</div>';
     }
-    if (k === 'meldingen') { var ns = myNotifs().slice(0, 5); return ns.length ? ns.map(function (n) { return '<div class="w-row"><span>' + esc(n.text) + '</span></div>'; }).join('') : '<p class="empty">Geen meldingen.</p>'; }
+    if (k === 'meldingen') { var ns = myNotifs().slice(0, 6); return notifList(ns, true) + (ns.length ? '<button type="button" class="text-btn" data-nxall style="margin-top:.3rem">Alles wissen</button>' : ''); }
     if (k === 'saldo') return saldoHtml(state.user);
     if (k === 'aanvragen') {
       var pend = requests.filter(function (r) { return r.status === 'pending' && r.person !== state.user; }).slice(0, 6);
@@ -1938,6 +2096,7 @@
     box.querySelectorAll('[data-wdel]').forEach(function (b) { b.addEventListener('click', function () { var k = b.getAttribute('data-wdel'); cfg.list = cfg.list.filter(function (x) { return x !== k; }); persist(); renderWidgets(); }); });
     var sel = document.getElementById('w-new'); if (sel) sel.addEventListener('change', function () { if (sel.value) { cfg.list.push(sel.value); persist(); renderWidgets(); } });
     box.querySelectorAll('[data-wgo]').forEach(function (b) { b.addEventListener('click', function () { state.cursor = parseIso(b.getAttribute('data-wgo')); state.tab = 'agenda'; render(); }); });
+    bindNotifs(box, renderWidgets);
     box.querySelectorAll('[data-wabs]').forEach(function (b) { b.addEventListener('click', function () { openAbsence(b.getAttribute('data-wabs')); }); });
     box.querySelectorAll('[data-wgap]').forEach(function (b) { b.addEventListener('click', function () { var v = b.getAttribute('data-wgap'); openGaps(function (g) { return g.date === v; }, 'Tekorten ' + short(parseIso(v))); }); });
   }

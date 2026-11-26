@@ -35,3 +35,12 @@ echt delen tussen telefoons en pushberichten vragen om een server;
 de beheerderscode is geen echte beveiliging.
 
 Na een wijziging: verhoog `VERSION` in `sw.js`, zodat telefoons de nieuwe versie ophalen.
+
+### Versie 18
+- Meldingen in- en uitklapbaar, per stuk of allemaal te verwijderen (profiel en widget)
+- Inplannen vraagt eerst bevestiging als het iets overschrijft (bijv. AO = hele dag)
+- "Geen dienst" binnen 12 weken wordt een verzoek dat de (dienst)planner goedkeurt
+- Diensten **uitrollen**: eerst geen dienst, vakantie en AO, dan eerlijk naar FTE; maand blijft concept tot **Publiceren**
+- FTE-tabel voor iedereen zichtbaar (alleen gepubliceerde diensten)
+- **Dienst ruilen**: collega gaat akkoord en het is direct geregeld; dienstplanner krijgt een melding
+- Assistent in Claude-stijl
