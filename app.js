@@ -8,7 +8,7 @@
   var PEOPLE = D.people;
   var ADMIN = { id: 'ADMIN', name: 'Beheerder', group: 'Beheer', role: 'admin', note: '' };
   var CONFIG = window.RP_CONFIG || {};
-  var APP_VERSION = '16 · 25 nov 2026';
+  var APP_VERSION = '17 · 26 nov 2026';
   PEOPLE.concat([ADMIN]).forEach(function (p) { p.baseName = p.name; });
   function usernameOf(id) { if (id === 'ADMIN') return 'beheerder'; var p = person(id); return p.baseName.toLowerCase().replace(/\s+/g, '-'); }
   function defaultPw(id) { return id === 'ADMIN' ? '1234' : 'welkom'; }
@@ -772,7 +772,10 @@
   function dutyShort(pid) { return person(pid).name.replace(/^Chirurg /, '').split(' ')[0]; }
   function isNoDuty(pid, di) { return !!(noDuty[pid] && noDuty[pid][di]); }
   function absentOn(pid, di) { var r = absenceFor(pid, di, 0) || absenceFor(pid, di, 1); if (r) return r; var d = parseIso(di); if (weekday(d) > 4) return requests.filter(function (x) { return x.person === pid && x.status !== 'declined' && di >= x.from && di <= x.to; })[0] || null; return null; }
-  function dutyBlock(pid, di) { if (isNoDuty(pid, di)) return 'geen dienst'; var a = absentOn(pid, di); if (a) return a.type.toLowerCase() + (a.status === 'pending' ? ' (aangevraagd)' : ''); return ''; }
+  /* AO (Ad en Org) is altijd een hele dag en telt als niet beschikbaar voor dienst */
+  function isAO(text) { return codeOf(text || '') === 'AO'; }
+  function aoOn(pid, di) { var p = person(pid), d = parseIso(di); return isAO(slot(p, d, 0).text) || isAO(slot(p, d, 1).text); }
+  function dutyBlock(pid, di) { if (isNoDuty(pid, di)) return 'geen dienst'; var a = absentOn(pid, di); if (a) return a.type.toLowerCase() + (a.status === 'pending' ? ' (aangevraagd)' : ''); if (aoOn(pid, di)) return 'AO'; return ''; }
   function dutyStats(year) {
     var ppl = dutyPeople(), fteSum = ppl.reduce(function (s, p) { return s + (rights[p.id].fte || 0); }, 0) || 1;
     var days = Math.round((new Date(year + 1, 0, 1) - new Date(year, 0, 1)) / 86400000), today = iso(new Date());
@@ -829,8 +832,8 @@
     var me = person(state.user), st = dutyStats(y);
     var html = '';
     if (planner) html += '<div class="seg" style="grid-template-columns:repeat(2,1fr)" role="tablist" aria-label="Weergave"><button type="button" data-dmode="plan" aria-selected="' + (mode === 'plan') + '">Planning</button><button type="button" data-dmode="mijn" aria-selected="' + (mode === 'mijn') + '">Mijn beschikbaarheid</button></div>';
-    if (mode === 'plan') html += '<div class="btn-row"><button type="button" class="btn" id="d-auto">Automatisch verdelen</button><button type="button" class="btn secondary" id="d-clear">Maand leegmaken</button></div><p class="note" style="margin:0">Tik op een dag om iemand in te plannen. Vakantie (ook aangevraagd) en "geen dienst" tellen als niet beschikbaar; ✕ in een dag laat zien wie geen dienst kan. Verdeling naar FTE.</p>';
-    else html += '<p class="note" style="margin:0">Tik op de dagen waarop je <b>geen dienst</b> kunt. Vakantie hoef je niet aan te geven; die telt automatisch mee.</p>';
+    if (mode === 'plan') html += '<div class="btn-row"><button type="button" class="btn" id="d-auto">Automatisch verdelen</button><button type="button" class="btn secondary" id="d-clear">Maand leegmaken</button></div><p class="note" style="margin:0">Tik op een dag om iemand in te plannen. Vakantie (ook aangevraagd), AO-dagen en "geen dienst" tellen als niet beschikbaar; in een dag zie je wie geen dienst kan (✕ = zelf opgegeven, AO = Ad en Org, V = vakantie). Verdeling naar FTE.</p>';
+    else html += '<p class="note" style="margin:0">Tik op de dagen waarop je <b>geen dienst</b> kunt. Vakantie en AO-dagen hoef je niet aan te geven; die tellen automatisch mee.</p>';
     html += '<div class="month"><div class="month-head">' + DAYS.map(function (x) { return '<span>' + x + '</span>'; }).join('') + '</div><div class="month-grid">';
     for (var i = 0; i < 42; i++) {
       var d = addDays(start, i); if (i >= 35 && d.getMonth() !== cur.getMonth()) break;
@@ -838,11 +841,18 @@
       if (mode === 'plan') {
         if (pid) { var bl = dutyBlock(pid, di); inner = '<span class="mbar ' + (bl ? 't-AF pend' : 't-DI') + '" title="' + esc(person(pid).name + (bl ? ' · ' + bl : '')) + '">' + esc(dutyShort(pid)) + (bl ? ' !' : '') + '</span>'; }
         else inner = '<span class="mbar" style="color:var(--muted)">–</span>';
-        var nds = dutyPeople().filter(function (p) { return p.id !== pid && isNoDuty(p.id, di); });
-        if (nds.length) inner += '<span class="mbar t-AF pend" title="' + esc('Geen dienst: ' + nds.map(function (p) { return p.name; }).join(', ')) + '">✕ ' + esc(nds.map(function (p) { return dutyShort(p.id); }).join(' ')) + '</span>';
+        /* Iedereen die niet kan: zelf opgegeven "geen dienst", AO-dag of (aangevraagde) afwezigheid */
+        /* Per reden één balkje: ✕ = zelf opgegeven, AO = Ad en Org, V/C/O/Z = afwezig */
+        var grp = {}, order = [];
+        dutyPeople().forEach(function (p) {
+          if (p.id === pid) return; var why = dutyBlock(p.id, di); if (!why) return;
+          var tag = why === 'geen dienst' ? '✕' : why === 'AO' ? 'AO' : absLetter(absentOn(p.id, di));
+          if (!grp[tag]) { grp[tag] = []; order.push(tag); } grp[tag].push({ p: p, why: why });
+        });
+        order.forEach(function (tag) { var xs = grp[tag]; inner += '<span class="mbar t-AF pend" title="' + esc('Geen dienst: ' + xs.map(function (x) { return x.p.name + ' (' + x.why + ')'; }).join(', ')) + '">' + esc(tag + ' ' + xs.map(function (x) { return dutyShort(x.p.id); }).join(' ')) + '</span>'; });
       } else {
-        var own = state.user, nd = isNoDuty(own, di), ab = absentOn(own, di);
-        inner = (duties[di] === own ? '<span class="mbar t-DI">' + dutyType(d)[0] + '</span>' : '') + (nd ? '<span class="mbar t-AF pend">geen</span>' : '') + (ab ? '<span class="mbar t-AF">' + absLetter(ab) + '</span>' : '');
+        var own = state.user, nd = isNoDuty(own, di), ab = absentOn(own, di), ao = !ab && aoOn(own, di);
+        inner = (duties[di] === own ? '<span class="mbar t-DI">' + dutyType(d)[0] + '</span>' : '') + (nd ? '<span class="mbar t-AF pend">geen</span>' : '') + (ao ? '<span class="mbar t-AF">AO</span>' : '') + (ab ? '<span class="mbar t-AF">' + absLetter(ab) + '</span>' : '');
       }
       html += '<button type="button" class="mday' + (d.getMonth() !== cur.getMonth() ? ' out' : '') + (wd > 4 ? ' weekend' : '') + (di === today ? ' today' : '') + '" data-dday="' + di + '"><span class="mnum">' + d.getDate() + '</span>' + inner + '</button>';
     }
@@ -1372,7 +1382,9 @@
     });
   }
   function planBlocks(pids, dateIso, halves, text, noteText, doNotify) {
+    if (isAO(text)) halves = [0, 1]; /* AO is altijd de hele dag */
     var v = { pids: pids, date: dateIso, halves: halves, text: text }, d = parseIso(dateIso);
+    if (isAO(text) && duties[dateIso] && pids.indexOf(duties[dateIso]) >= 0) notify('DIENST', person(duties[dateIso]).name + ' heeft AO op dienstdag ' + short(d) + ': nieuwe dienst nodig');
     var planId = 'plan' + Date.now(), procLines = [];
     var newGaps = [];
     v.halves.forEach(function (h) {
@@ -1404,7 +1416,7 @@
       return '<label class="toggle" style="min-height:40px;justify-content:flex-start;gap:.5rem"><input type="checkbox" data-pp="' + p.id + '"' + (pids.indexOf(p.id) >= 0 ? ' checked' : '') + '>' + esc(p.name) + '</label>';
     }).join('') + '</div></div>' +
       '<div class="grid2"><label class="f">Datum<input type="date" id="pl-date" value="' + dIso + '"></label>' +
-      '<label class="f">Dagdeel<select id="pl-half"><option value="0"' + (half === 0 ? ' selected' : '') + '>Ochtend</option><option value="1"' + (half === 1 ? ' selected' : '') + '>Middag</option><option value="2">Hele dag</option></select></label></div>' +
+      '<label class="f">Dagdeel<select id="pl-half"><option value="0"' + (half === 0 && !isAO(presetText) ? ' selected' : '') + '>Ochtend</option><option value="1"' + (half === 1 && !isAO(presetText) ? ' selected' : '') + '>Middag</option><option value="2"' + (isAO(presetText) ? ' selected' : '') + '>Hele dag</option></select></label></div>' +
       '<label class="f">Activiteit<select id="pl-act">' + PLAN_ACTS.map(function (a) { return '<option value="' + esc(a[0]) + '"' + ((known && a[0] === presetText) || (!known && presetText && a[0] === '') ? ' selected' : '') + '>' + esc(a[1]) + '</option>'; }).join('') + '</select></label>' +
       '<label class="f" id="pl-custom-wrap"' + (!known && presetText ? '' : ' hidden') + '>Eigen omschrijving<input id="pl-custom" maxlength="60" value="' + esc(!known && presetText ? presetText : '') + '"></label>' +
 
@@ -1429,6 +1441,10 @@
           return person(pid).name + ': ' + v.halves.map(function (h) { var s = slot(person(pid), d, h); return HALVES[h].toLowerCase() + ' ' + (s.absent ? s.absent.type.toLowerCase() : (s.text || 'leeg')) + ' → ' + v.text; }).join(', ');
         }).join(' · ');
       }
+      /* AO is altijd de hele dag: dagdeel springt mee en ligt vast */
+      function syncAO() { var ao = isAO(vals().text), hs = root.querySelector('#pl-half'); if (ao) hs.value = '2'; hs.disabled = ao; }
+      root.querySelector('#pl-act').addEventListener('change', syncAO); root.querySelector('#pl-custom').addEventListener('input', syncAO);
+      syncAO();
       root.querySelectorAll('input,select').forEach(function (i) { i.addEventListener('change', preview); i.addEventListener('input', preview); });
       preview();
       root.querySelector('#pl-save').addEventListener('click', function () {
