@@ -8,7 +8,7 @@
   var PEOPLE = D.people;
   var ADMIN = { id: 'ADMIN', name: 'Beheerder', group: 'Beheer', role: 'admin', note: '' };
   var CONFIG = window.RP_CONFIG || {};
-  var APP_VERSION = '18 · 26 nov 2026';
+  var APP_VERSION = '19 · 26 nov 2026';
   PEOPLE.concat([ADMIN]).forEach(function (p) { p.baseName = p.name; });
   function usernameOf(id) { if (id === 'ADMIN') return 'beheerder'; var p = person(id); return p.baseName.toLowerCase().replace(/\s+/g, '-'); }
   function defaultPw(id) { return id === 'ADMIN' ? '1234' : 'welkom'; }
@@ -172,6 +172,7 @@
   var noDuty = load('rp.nodienst', {});
   var dutyPub = load('rp.dutypub', {});   // 'JJJJ-MM' -> true als de maand gepubliceerd is
   var swaps = load('rp.swaps', []);
+  var dutyTimes = load('rp.dutytimes', { D: ['17:30', '08:00'], WD: ['17:30', '08:00'] });
   if (!load('rp.dienstSeeded', false)) { if (rights.B && rights.B.role === 'specialist') rights.B.role = 'dienst'; save('rp.dienstSeeded', true); }
   function applyNames() { PEOPLE.concat([ADMIN]).forEach(function (p) { var pr = profiles[p.id]; p.name = pr && pr.naam ? pr.naam : p.baseName; }); }
   applyNames();
@@ -180,7 +181,7 @@
     var nm = addDays(mondayOf(new Date()), 7);
     requests = [{ id: 'seed1', person: 'C', by: 'C', type: 'Congres', from: iso(addDays(nm, 2)), fromPart: 'dag', to: iso(addDays(nm, 3)), toPart: 'dag', note: 'Voorbeeldaanvraag', status: 'pending', created: Date.now() }];
   }
-  function persist() { save('rp.prefs', prefs); save('rp.overrides', overrides); save('rp.notes', notes); save('rp.rights', rights); save('rp.requests', requests); save('rp.gaps', gaps); save('rp.profiles', profiles); save('rp.notifs', notifs); save('rp.pw', pwStore); save('rp.feedback', feedback); save('rp.appts', appts); save('rp.duties', duties); save('rp.nodienst', noDuty); save('rp.dutypub', dutyPub); save('rp.swaps', swaps); }
+  function persist() { save('rp.prefs', prefs); save('rp.overrides', overrides); save('rp.notes', notes); save('rp.rights', rights); save('rp.requests', requests); save('rp.gaps', gaps); save('rp.profiles', profiles); save('rp.notifs', notifs); save('rp.pw', pwStore); save('rp.feedback', feedback); save('rp.appts', appts); save('rp.duties', duties); save('rp.nodienst', noDuty); save('rp.dutypub', dutyPub); save('rp.swaps', swaps); save('rp.dutytimes', dutyTimes); }
   persist();
 
   /* =========================================================
@@ -708,8 +709,8 @@
     var today = iso(d) === iso(new Date()), n = apptsOn(p.id, iso(d)).length;
     var html = '<h2 class="day-head' + (today ? ' today' : '') + '"><span>' + esc(longDate(d)) + '</span><span class="note">' + (n ? n + ' afspra' + (n > 1 ? 'ken' : 'ak') + ' · ' : '') + (today ? 'vandaag' : '') + '</span></h2>';
     var add = '<button type="button" class="mini-btn" data-newappt="' + p.id + '|' + iso(d) + '">+ Afspraak toevoegen</button>';
-    if (weekday(d) > 4) return html + '<div class="list">' + dutyCard(p.id, iso(d)) + apptCards(p.id, iso(d), 0) + apptCards(p.id, iso(d), 1) + apptCards(p.id, iso(d), 2) + '</div>' + (n || dutyOf(iso(d)) === p.id ? '' : '<p class="empty">Weekend, geen basisrooster.</p>') + add;
-    return html + gapCards(iso(d)) + '<div class="list">' + dutyCard(p.id, iso(d)) + eventCard(p, d, 0) + eventCard(p, d, 1) + apptCards(p.id, iso(d), 2) + '</div>' + add;
+    if (weekday(d) > 4) return html + '<div class="list">' + apptCards(p.id, iso(d), 0) + apptCards(p.id, iso(d), 1) + dutyCard(p.id, iso(d)) + apptCards(p.id, iso(d), 2) + '</div>' + (n || dutyOf(iso(d)) === p.id ? '' : '<p class="empty">Weekend, geen basisrooster.</p>') + add;
+    return html + gapCards(iso(d)) + '<div class="list">' + eventCard(p, d, 0) + eventCard(p, d, 1) + apptCards(p.id, iso(d), 2) + dutyCard(p.id, iso(d)) + '</div>' + add;
   }
 
   /* =========================================================
@@ -816,6 +817,9 @@
     if (dutyPub[iso(new Date(y, m, 1)).slice(0, 7)]) Object.keys(made).forEach(function (pid) { notify(pid, 'Je hebt ' + made[pid] + ' dienst' + (made[pid] > 1 ? 'en' : '') + ' in ' + MONTHS_LONG[m] + ' gekregen'); });
     return n;
   }
+  /* Diensttijden: loopt de dienst door tot de volgende ochtend, dan staat hij alleen op de startdag */
+  function dutyTimesOf(d) { return dutyTimes[dutyType(d)[0]] || ['17:30', '08:00']; }
+  function dutyTimeLabel(d) { var tm = dutyTimesOf(d); return tm[0] + ' – ' + tm[1] + (toMin(tm[1]) <= toMin(tm[0]) ? ' (volgende dag)' : ''); }
   function dutyChip(pid, di) {
     if (dutyOf(di) !== pid) return '';
     var t = dutyType(parseIso(di));
@@ -824,7 +828,8 @@
   function dutyCard(pid, di) {
     if (dutyOf(di) !== pid) return '';
     var t = dutyType(parseIso(di));
-    return '<div class="event t-DI" style="cursor:default"><span class="time">hele<br>dag</span><span class="body"><span class="ttl"><span class="code">' + t[0] + '</span><span class="t">' + t[1] + '</span></span></span></div>';
+    var tm = dutyTimesOf(parseIso(di)), next = toMin(tm[1]) <= toMin(tm[0]);
+    return '<div class="event t-DI" style="cursor:default"><span class="time">' + tm[0] + '<br>' + tm[1] + '</span><span class="body"><span class="ttl"><span class="code">' + t[0] + '</span><span class="t">' + t[1] + '</span></span><span class="meta">' + esc(dutyTimeLabel(parseIso(di))) + '</span></span></div>';
   }
   function setNoDuty(pid, di, on) {
     noDuty[pid] = noDuty[pid] || {};
@@ -918,6 +923,7 @@
     if (planner) html += '<div class="seg" style="grid-template-columns:repeat(2,1fr)" role="tablist" aria-label="Weergave"><button type="button" data-dmode="plan" aria-selected="' + (mode === 'plan') + '">Planning</button><button type="button" data-dmode="mijn" aria-selected="' + (mode === 'mijn') + '">Mijn beschikbaarheid</button></div>';
     var ym = iso(first).slice(0, 7), hasAny = Object.keys(duties).some(function (x) { return x.slice(0, 7) === ym; });
     if (mode === 'plan') html += (hasAny ? (dutyPub[ym] ? '<p class="ok-banner">✓ ' + esc(MONTHS_LONG[cur.getMonth()]) + ' is gepubliceerd: iedereen ziet zijn diensten. Wijzigingen gaan direct door en betrokkenen krijgen een melding.</p>' : '<p class="warn" style="margin:0"><b>Concept.</b> Alleen jij ziet deze diensten. Controleer ze en tik op <b>Publiceren</b>; dan krijgt iedereen zijn diensten te zien en een melding.</p>') : '') +
+      '<p class="note" style="margin:0">Tijden: dagdienst ' + esc(dutyTimeLabel(new Date(2026, 0, 5))) + ' · weekenddienst ' + esc(dutyTimeLabel(new Date(2026, 0, 3))) + ' · <button type="button" class="text-btn" id="d-times" style="min-height:0;padding:0">wijzig</button></p>' +
       '<div class="btn-row"><button type="button" class="btn" id="d-auto">Uitrollen</button>' + (hasAny && !dutyPub[ym] ? '<button type="button" class="btn" id="d-pub">Publiceren</button>' : '') + '<button type="button" class="btn secondary" id="d-clear">Maand leegmaken</button></div><p class="note" style="margin:0">Tik op een dag om iemand in te plannen. Vakantie (ook aangevraagd), AO-dagen en "geen dienst" tellen als niet beschikbaar; in een dag zie je wie geen dienst kan (✕ = zelf opgegeven, AO = Ad en Org, V = vakantie). Verdeling naar FTE.</p>';
     else html += '<p class="note" style="margin:0">Tik op de dagen waarop je <b>geen dienst</b> kunt. Vakantie en AO-dagen hoef je niet aan te geven; die tellen automatisch mee.</p>';
     html += '<div class="month"><div class="month-head">' + DAYS.map(function (x) { return '<span>' + x + '</span>'; }).join('') + '</div><div class="month-grid">';
@@ -981,6 +987,16 @@
         'Het systeem houdt eerst rekening met:\n• ' + nd + '× geen dienst (opgegeven)\n• ' + ab + '× vakantie of andere afwezigheid\n• ' + ao + '× AO\n' + (rqn ? '• ' + rqn + '× geen-dienstverzoek dat nog niet is goedgekeurd: telt nog NIET mee\n' : '') +
         '\nDaarna verdeelt het de ' + open + ' lege dagen eerlijk naar FTE, op basis van wat iedereen dit jaar al heeft. Bestaande diensten blijven staan.' + (dutyPub[ym] ? '' : '\n\nHet blijft een concept tot je op Publiceren tikt.'),
         'Uitrollen', 'Annuleren', function () { var n = autoDistribute(cur); persist(); render(); toast(n ? n + ' dienstdagen verdeeld · controleer en publiceer' : 'Niets te verdelen'); });
+    });
+    var dt = document.getElementById('d-times'); if (dt) dt.addEventListener('click', function () {
+      openSheet('Diensttijden', '<p class="note" style="margin:0">Eindtijd vóór of gelijk aan de begintijd betekent: tot de volgende dag. De dienst staat dan alleen op de dag waarop hij begint.</p>' +
+        [['D', 'Dagdienst (ma–vr)'], ['WD', 'Weekenddienst (za en zo)']].map(function (k) { var v = dutyTimes[k[0]]; return '<div class="grid2"><label class="f">' + k[1] + ' begint<input type="time" data-dt="' + k[0] + '|0" value="' + v[0] + '"></label><label class="f">tot<input type="time" data-dt="' + k[0] + '|1" value="' + v[1] + '"></label></div>'; }).join('') +
+        '<button type="button" class="btn" id="dt-save">Opslaan</button>', function (root) {
+        root.querySelector('#dt-save').addEventListener('click', function () {
+          root.querySelectorAll('[data-dt]').forEach(function (i) { var k = i.getAttribute('data-dt').split('|'); if (/^\d{2}:\d{2}$/.test(i.value)) dutyTimes[k[0]][+k[1]] = i.value; });
+          persist(); closeSheet(); render(); toast('Diensttijden opgeslagen');
+        });
+      });
     });
     var pb = document.getElementById('d-pub'); if (pb) pb.addEventListener('click', function () {
       var bad = Object.keys(duties).filter(function (x) { return x.slice(0, 7) === ym && dutyBlock(duties[x], x); }).length;
@@ -1087,6 +1103,10 @@
           html += '<button type="button" class="tg-ev t-AF' + (big ? ' big' : '') + (pend ? ' pend' : '') + (s.text ? ' half-r' : '') + '" data-abs="' + ab.id + '" style="' + pos + '">' +
             '<span class="ttl"><span class="code">' + absLetter(ab) + '</span> ' + esc(ab.type) + '</span><span class="sm">' + (pend ? 'Aangevraagd' : 'Goedgekeurd') + '</span>' + (big && ab.note ? '<span class="sm">' + esc(ab.note) + '</span>' : '') + '</button>';
         }
+      }
+      if (dutyOf(iso(d)) === p.id) {
+        var dtm = dutyTimesOf(d), ds = Math.max(toMin(dtm[0]), GRID_START * 60), de = toMin(dtm[1]) <= toMin(dtm[0]) ? GRID_END * 60 : Math.min(toMin(dtm[1]), GRID_END * 60);
+        if (de > ds) html += '<div class="tg-ev t-DI' + (big ? ' big' : '') + '" style="top:' + ((ds / 60 - GRID_START) * hourH) + 'rem;height:' + Math.max(big ? 2.4 : 1.2, (de - ds) / 60 * hourH - 0.15) + 'rem;cursor:default;z-index:1"><span class="ttl"><span class="code">' + dutyType(d)[0] + '</span> ' + esc(dutyType(d)[1]) + '</span><span class="sm">' + esc(dutyTimeLabel(d)) + '</span></div>';
       }
       apptsOn(p.id, iso(d)).forEach(function (a) {
         var k = kindInfo(a.kind), st = Math.max(toMin(a.start), GRID_START * 60), en = Math.min(toMin(a.end), GRID_END * 60);
@@ -1876,6 +1896,7 @@
       var st = dutyStats(y), ver = {};
       Object.keys(st).forEach(function (pid) { var s = st[pid]; ver[pid] = { fte: s.fte, procent: Math.round(s.pct * 10) / 10, doelJaar: Math.round(s.doel), ingepland: s.gepland, gedaan: s.gedaan }; });
       ctx.dienstVerdeling = ver;
+      ctx.dienstTijden = { dagdienst: dutyTimeLabel(new Date(2026, 0, 5)), weekenddienst: dutyTimeLabel(new Date(2026, 0, 3)) };
     }
     if (canApprove()) {
       var team = {};
